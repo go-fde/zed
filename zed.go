@@ -238,6 +238,7 @@ func Open(r io.ReaderAt, size int64, password string, opts ...Option) (*Archive,
 	if err != nil {
 		return nil, err
 	}
+	dec.perFile = g.info.Version == "0200"
 	entries, err := parseCatalog(catBlob, dec, lim)
 	if err != nil {
 		return nil, err
@@ -591,7 +592,8 @@ func parseEntry(b []byte, d *decryptor) (Entry, error) {
 		copy(e.parent[:], p)
 	}
 	if ct, ok := t.first(tagNameCiphertext); ok {
-		e.Name, err = utf16le(d.decrypt(d.iv[:], ct))
+		fd := d.withFile(e.ID)
+		e.Name, err = utf16le(fd.decrypt(fd.iv[:], ct))
 	} else if v, ok := t.first(tagHalfAnon); ok {
 		e.Name, err = utf16le(v)
 	}

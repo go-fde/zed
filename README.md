@@ -101,18 +101,27 @@ corpora are committed in `testdata/fuzz/` and replayed by `go test`.
 * `ZED_CORPUS=<folder>` runs `TestCorpus` on real containers: every `*.zed`
   in the folder, with the password on the first line of the folder's
   `README.md`. Without it the test skips loudly. The containers are never
-  committed.
+  committed. It extracts every entry and checks each file's length against
+  the catalog, its path against `parent_directory_id`, and that images decode
+  (`image.Decode`: random bytes from a wrong key, IV or chunk cannot). It
+  fails if it extracted no file. With `ZED_CORPUS_REFERENCE=<folder>` it also
+  compares each extracted file byte for byte with the file of the same name
+  there (names compared after Unicode normalisation); the originals are read
+  at run time and never copied anywhere.
 
 ### Real-container interoperability (ZED! Free 2024.4)
 
 One container made by ZED! Free 2024.4 was opened (not committed): it opens
-with its password and refuses a wrong one with `ErrPassword`, but it **holds no
-file**, so the file-stream path (chunks, CTS on real data, the stream-name
-shuffle with a real `file_id`) is still verified only by the 2017 vectors.
-What the container showed, and where the 2017 document does not match:
+with its password, refuses a wrong one with `ErrPassword`, and holds a folder
+with one PNG screen capture (11 508 bytes, 292 × 234). The file is extracted
+byte for byte equal to the original, through the whole file-stream path:
+stream name from `file_id`, 512-byte chunks, CTS, zlib. What the container
+showed, and where the 2017 document does not match:
 
 | 2017 document | ZED! Free 2024.4 container |
 | --- | --- |
+| a file's name and chunks use the global `files_iv` ("the same key and IV") | the IV is `files_iv` **XOR the file's `file_id`** (raw bytes, not the shuffled stream name): `IV(file) = files_iv ^ file_id`, then the chunk IV is `AES-ECB(key, LE16(chunk) ^ IV(file))` as before. Found because the first 16 bytes of every name decrypted to garbage and the rest to text (a wrong CBC IV spoils one block), and `files_iv ^ file_id` was the value that makes the first block read "Capture ". Applied to archives whose version bytes are `0200`; `0100` archives (the 2017 ones) keep the global IV. Verified on one container; whether version `0200` or the 2024 release is what changed is not known. |
+| file names are filename_ciphertext, "may have a trailing NUL" | UTF-16LE in NFC form (macOS composes é and à the same way); no NUL seen. |
 | `_ctlfile` is property index 3, `_catalog` index 4 | The dictionary names `_ctlfile` = property **4**, `_catalog` = **5**, and a third blob `_seal` = 6 (264 bytes). The names must be resolved through the dictionary; 3 and 4 are only a fallback here. |
 | delimiter followed by `0100` for the free version | `0200`. (John the Ripper's `zed2john` also reads `0100` as free and `0200` as paid.) The TLV layout is read the same. |
 | archive created with `{00000188-1000-3CA8-8868-36F59DEFD14D}` (Zed! Free 1.0.188) | `{00000018-A040-3CA8-8868-36F59DEFD14D}` |
@@ -129,10 +138,10 @@ blocks" vectors say "'ABC...Z' 160 times", but the 34 ciphertext bytes decrypt
 to a checksum-valid zlib stream holding one alphabet (the STREAM vector with
 the same length says once). The test checks what the bytes hold.
 
-Not yet verified on a real container: file streams, directories, several
-users, SHA-1, mode 103, 24/32-byte keys, ZED! Free 2024.4 with files. A
-container with a few files (one over 512 bytes, one in a folder) would close
-the file-stream gap.
+Not yet verified on a real container: several files, files under 16 bytes of
+ciphertext, nested folders deeper than one, several users, SHA-1, mode 103,
+24/32-byte keys, and any `0100` archive (so the rule that `0100` keeps the
+global IV rests on the 2017 vectors only).
 
 ## The CFB reader
 
