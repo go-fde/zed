@@ -21,7 +21,7 @@ import (
 // package's own derivation and builder only, not against a real container.
 func TestHashFunc43IsPBKDF2SHA512(t *testing.T) {
 	h, err := hashFor(hashPBKDF2SHA512)
-	if err != nil || h.size != 64 || h.hmacHash == nil || h.weight() != pbkdf2SHA512Weight {
+	if err != nil || h.size != 64 || h.hmacHash == nil || h.weight() != 5 { // 5: the measured weight, written out
 		t.Fatalf("hashFor(43): %+v %v", h, err)
 	}
 	// Known answer for PBKDF2-HMAC-SHA-512 (password "password", salt "salt",
@@ -114,14 +114,16 @@ func TestBudgetChargesEachSchemeAsItDerives(t *testing.T) {
 		t.Errorf("SHA-1 cost %d/%d", pba, pbe)
 	}
 	// PBKDF2-HMAC-SHA-512: the check one pass; key and IV together, one pass for
-	// up to 48 bytes (not the 2 or 3 passes PKCS#12 takes).
+	// up to 48 bytes (not the 2 or 3 passes PKCS#12 takes). The 5 is the weight
+	// measured with BenchmarkKDFRound (225.3 ns against 46.4 ns, 4.86), written
+	// out: changing the constant must fail here, not pass by following it.
 	for _, keyLen := range []int{16, 24, 32} {
-		if pba, pbe := h43.cost(100, 100, keyLen); pba != 100*pbkdf2SHA512Weight || pbe != 100*pbkdf2SHA512Weight {
-			t.Errorf("hash 43, key %d: cost %d/%d", keyLen, pba, pbe)
+		if pba, pbe := h43.cost(100, 100, keyLen); pba != 500 || pbe != 500 {
+			t.Errorf("hash 43, key %d: cost %d/%d, want 500/500", keyLen, pba, pbe)
 		}
 	}
-	if pba, pbe := h43.cost(1, 1, 64); pbe != 2*pbkdf2SHA512Weight || pba != pbkdf2SHA512Weight {
-		t.Errorf("a 64-byte key would take two passes: %d/%d", pba, pbe)
+	if pba, pbe := h43.cost(1, 1, 64); pbe != 10 || pba != 5 {
+		t.Errorf("a 64-byte key would take two passes: %d/%d, want 5/10", pba, pbe)
 	}
 }
 
