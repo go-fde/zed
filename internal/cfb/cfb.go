@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf16"
@@ -69,7 +70,9 @@ type Entry struct {
 	// (shorter names first, then upper-cased code points).
 	Children []*Entry
 
-	start uint32
+	start  uint32
+	once   sync.Once
+	byName map[string]*Entry
 }
 
 // IsDir reports whether the entry is a storage (or the root).
@@ -206,13 +209,13 @@ func walk(table []uint32, start uint32, need, limit int64) ([]uint32, error) {
 	if need > limit {
 		return nil, fmt.Errorf("%w: %d sectors wanted, %d available", ErrFormat, need, limit)
 	}
-	seen := make([]bool, limit)
+	seen := make([]uint64, (limit+63)/64) // a bit per sector, not a byte
 	var out []uint32
 	for s := start; need < 0 && s != endOfChain || int64(len(out)) < need; s = table[s] {
-		if int64(s) >= limit || seen[s] {
+		if int64(s) >= limit || seen[s/64]&(1<<(s%64)) != 0 {
 			return nil, fmt.Errorf("%w: bad sector chain at %#x", ErrFormat, s)
 		}
-		seen[s] = true
+		seen[s/64] |= 1 << (s % 64)
 		out = append(out, s)
 	}
 	return out, nil
@@ -370,13 +373,15 @@ func upper(s string) string { return strings.Map(unicode.ToUpper, s) }
 // Child returns the child of e whose name equals name, ignoring case as
 // MS-CFB defines it.
 func (e *Entry) Child(name string) *Entry {
-	want := upper(name)
-	for _, c := range e.Children {
-		if upper(c.Name) == want {
-			return c
+	e.once.Do(func() { // index once: looking up every entry stays linear
+		e.byName = make(map[string]*Entry, len(e.Children))
+		for _, c := range e.Children {
+			if _, dup := e.byName[upper(c.Name)]; !dup {
+				e.byName[upper(c.Name)] = c
+			}
 		}
-	}
-	return nil
+	})
+	return e.byName[upper(name)]
 }
 
 // Lookup resolves a slash-separated path from the root. Empty elements are
@@ -469,7 +474,12 @@ func (s *Stream) ReadAt(p []byte, off int64) (int, error) {
 		buf := p[done : done+n]
 		var err error
 		if s.mini {
-			_, err = s.f.mini.ReadAt(buf, int64(s.chain[i])*miniSectorSize+within)
+			// The mini stream may be shorter than its mini FAT chains say.
+			var got int
+			got, err = s.f.mini.ReadAt(buf, int64(s.chain[i])*miniSectorSize+within)
+			if got < len(buf) && (err == nil || errors.Is(err, io.EOF)) {
+				err = fmt.Errorf("%w: mini stream is shorter than its sector chain", ErrFormat)
+			}
 		} else {
 			err = s.f.readFull(buf, (int64(s.chain[i])+1)*unit+within)
 		}
@@ -494,6 +504,8 @@ func (f *File) ReadAll(e *Entry, max int64) ([]byte, error) {
 		return nil, err
 	}
 	b := make([]byte, s.size)
+	// ReadAt answers io.EOF only for an empty stream; a stream shorter than its
+	// size is an ErrFormat error, so no zero-filled tail is returned.
 	if _, err := s.ReadAt(b, 0); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}

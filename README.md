@@ -43,25 +43,36 @@ the on-the-fly folder variant.
 
 ## Limits (untrusted input)
 
-`DefaultLimits()`: 10 000 000 iterations per user (ZED! Free writes 100 000 and
-200 000), 64 users, 100 000 entries, 64 MiB of metadata, 4 GiB per decompressed
-file. An iteration count above the limit is refused with `ErrLimit` before any
-key derivation; so is a declared file size above the limit. A file is read
-through a reader that stops at its declared size: a zlib bomb that inflates
-past it is refused with `ErrFormat` after about that many bytes
-(`TestZlibBomb`: 64 MiB of zeros in under 200 KiB, run under a 128 MiB memory
-limit, allocates less than 8 MiB while being refused). File names with `/`,
-`\`, NUL, `.` or `..` are refused, so extracting by `Entry.Path` cannot escape
-a directory. The CFB layer bounds every chain by the number of sectors the
-file can hold and refuses cycles. The parsers (`FuzzOpen`, `FuzzControl`,
-`FuzzCatalog`, `FuzzMetadata`, and the CFB `FuzzOpen`) run in CI, with their
-corpora in `testdata/`.
+`DefaultLimits()`: 10 000 000 iterations for one user (ZED! Free writes 100 000
+and 200 000) and 30 000 000 hash iterations for all users together, 64 users,
+100 000 entries nested at most 256 deep with paths of at most 4096 bytes,
+64 MiB of metadata, 4 GiB per decompressed file. Iteration counts, and the
+lengths that set the cost of a derivation (`pba_checksum` between 1 byte and
+one hash output, salts and the wrapped key at most 256 bytes), are checked
+before any key derivation; a file size above the limit is refused too. The
+catalog's paths are built in linear time, parents first, after the depth and
+path caps are checked. A file is read through a reader that stops at its
+declared size: a zlib bomb that inflates past it is refused with `ErrFormat`
+after about that many bytes. `TestZlibBomb` (64 MiB of zeros in under 200 KiB)
+asserts that refusing it allocates under 8 MiB; that `TotalAlloc` check is the
+guard. The 128 MiB `debug.SetMemoryLimit` the test also sets is soft (the
+collector works harder, nothing is killed), so it is not a guard. File names
+with `/`, `\`, `:`, NUL, `.`, `..`, or a Windows reserved name (CON, PRN, AUX,
+NUL, COM1-9, LPT1-9, with or without an extension) are refused, as are two
+entries with one path, so extracting by `Entry.Path` cannot escape a
+directory. The CFB layer bounds every chain by the number of sectors the file
+can hold, refuses cycles, refuses a mini stream shorter than its chains, and
+indexes directory children once. The parsers (`FuzzOpen`, `FuzzControl`,
+`FuzzCatalog`, `FuzzMetadata`, and the CFB `FuzzOpen`) run in CI; their
+corpora are committed in `testdata/fuzz/` and replayed by `go test`.
 
 ## Tests
 
-* Every test vector of Beucler's document is checked, read from
-  `testdata/beucler-zed-format.html` (a verbatim copy; see Credits): TLV
-  (single and nested, with the three FILETIMEs), PBA/PBE with SHA-1 and
+* Every test vector of Beucler's document is checked. The file name, chunk IV
+  and chunked file stream vectors are read by the test from
+  `testdata/beucler-zed-format.html` (a verbatim copy; see Credits); the TLV,
+  PBA/PBE and stream name vectors are copied by hand into `vectors_test.go`.
+  They are: TLV (single and nested, with the three FILETIMEs), PBA/PBE with SHA-1 and
   SHA-256 (7 vectors, including the 36-character password), file name
   decryption (4 vectors: 0.x, 1, 1.x and 31.x blocks, STREAM and CTS), the
   `file_id` to stream name shuffle, the chunk IV, and the 30 chunked file
@@ -72,6 +83,12 @@ corpora in `testdata/`.
   512-byte chunk and 32 KiB batch boundaries; the refusal cases (damaged TLV,
   OLEPS, CFB, zlib, limits) bring `zed` and the CFB reader to 100 % statement
   coverage.
+* `TestTagsAsLiteralBytes` writes a whole `_ctlfile` and `_catalog` with the
+  TLV tags as literal hex, independent of the constants the reader and the
+  test writer share.
+* Regression tests for review findings: deep and cyclic catalogs, derivation
+  inputs (`pba_checksum`, salts), total derivation work, reserved names,
+  duplicate paths, hostile CFB headers, a short mini stream.
 * `ZED_CORPUS=<folder>` runs `TestCorpus` on real containers: every `*.zed`
   in the folder, with the password on the first line of the folder's
   `README.md`. Without it the test skips loudly. The containers are never
@@ -126,7 +143,7 @@ compares it with an "ideal" floor of one CBC decryption and one inflate. No
 reference extractor could be run here: ZED! Free has no command line, and
 the `zedie.py` proof of concept named in Beucler's document was not
 available to run. The timings of the first run were taken at a 1-minute load
-above 30 and are not published; allocation counts are exact: 18 346 per
+above 30 and are not published; allocation counts are exact: about 18 345 per
 extraction of 10 MiB (about one per 512-byte chunk).
 
 ## Credits and licence

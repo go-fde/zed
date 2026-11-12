@@ -31,6 +31,7 @@ func corpus(t *testing.T) (files []string, password string) {
 
 func TestCorpus(t *testing.T) {
 	files, pw := corpus(t)
+	opened := 0
 	for _, p := range files {
 		a, err := OpenFile(p, pw)
 		if err != nil {
@@ -55,5 +56,11 @@ func TestCorpus(t *testing.T) {
 		if _, err := OpenFile(p, pw+"x"); !errors.Is(err, ErrPassword) {
 			t.Errorf("%s: a wrong password gave %v", filepath.Base(p), err)
 		}
+		opened++
 	}
+	// A green run that opened nothing would say nothing about interoperability.
+	if opened == 0 || opened != len(files) {
+		t.Fatalf("opened %d of %d containers", opened, len(files))
+	}
+	t.Logf("opened %d real container(s)", opened)
 }

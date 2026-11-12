@@ -28,6 +28,10 @@ import (
 	"github.com/go-fde/zed/internal/cfb"
 )
 
+// maxSalt bounds the salts and the wrapped key, whose lengths come from the
+// file (the format uses 8 and 16 to 48).
+const maxSalt = 256
+
 const (
 	metadataStream = "\x05" + "5haaaaqaIekzeecnWj31zxh0Nc"
 	trailerText    = "ZoneCentral (R)\x00"
@@ -41,24 +45,38 @@ var (
 // Limits bounds the work an archive can ask for. A zero field takes the value
 // of DefaultLimits.
 type Limits struct {
-	MaxIterations int   // PBA/PBE iteration count a user may declare
-	MaxUsers      int   // password users examined
-	MaxEntries    int   // files and directories in the catalog
-	MaxMetadata   int64 // bytes of the metadata stream
-	MaxFileSize   int64 // decompressed bytes of one file
+	MaxIterations      int   // PBA/PBE iteration count one user may declare
+	MaxTotalIterations int   // hash iterations Open may be asked for, all users together
+	MaxUsers           int   // password users examined
+	MaxEntries         int   // files and directories in the catalog
+	MaxDepth           int   // directory nesting
+	MaxPathBytes       int   // length of an entry's slash-separated path
+	MaxMetadata        int64 // bytes of the metadata stream
+	MaxFileSize        int64 // decompressed bytes of one file
 }
 
-// DefaultLimits returns the limits Open uses: 10 million iterations (ZEDFREE
-// writes 100000 and 200000), 64 users, 100000 entries, 64 MiB of metadata and
-// 4 GiB per file.
+// DefaultLimits returns the limits Open uses: 10 million iterations for one
+// user (ZEDFREE writes 100000 and 200000) and 30 million hash iterations for
+// all of them, 64 users, 100000 entries nested at most 256 deep, paths of at
+// most 4096 bytes, 64 MiB of metadata and 4 GiB per file.
 func DefaultLimits() Limits {
-	return Limits{MaxIterations: 10_000_000, MaxUsers: 64, MaxEntries: 100_000, MaxMetadata: 64 << 20, MaxFileSize: 4 << 30}
+	return Limits{MaxIterations: 10_000_000, MaxTotalIterations: 30_000_000, MaxUsers: 64, MaxEntries: 100_000,
+		MaxDepth: 256, MaxPathBytes: 4096, MaxMetadata: 64 << 20, MaxFileSize: 4 << 30}
 }
 
 func (l Limits) withDefaults() Limits {
 	d := DefaultLimits()
 	if l.MaxIterations <= 0 {
 		l.MaxIterations = d.MaxIterations
+	}
+	if l.MaxTotalIterations <= 0 {
+		l.MaxTotalIterations = d.MaxTotalIterations
+	}
+	if l.MaxDepth <= 0 {
+		l.MaxDepth = d.MaxDepth
+	}
+	if l.MaxPathBytes <= 0 {
+		l.MaxPathBytes = d.MaxPathBytes
 	}
 	if l.MaxUsers <= 0 {
 		l.MaxUsers = d.MaxUsers
@@ -123,6 +141,7 @@ type Archive struct {
 	lim     Limits
 	info    Info
 	entries []Entry
+	byPath  map[string]int
 	closer  io.Closer
 }
 
@@ -134,11 +153,8 @@ func (a *Archive) Entries() []Entry { return append([]Entry(nil), a.entries...) 
 
 // Lookup returns the entry at a slash-separated path, or nil.
 func (a *Archive) Lookup(path string) *Entry {
-	path = strings.Trim(path, "/")
-	for i := range a.entries {
-		if a.entries[i].Path == path {
-			return &a.entries[i]
-		}
+	if i, ok := a.byPath[strings.Trim(path, "/")]; ok {
+		return &a.entries[i]
 	}
 	return nil
 }
@@ -216,7 +232,11 @@ func Open(r io.ReaderAt, size int64, password string, opts ...Option) (*Archive,
 	if err != nil {
 		return nil, err
 	}
-	return &Archive{cf: cf, dec: dec, lim: lim, info: g.info, entries: entries}, nil
+	byPath := make(map[string]int, len(entries))
+	for i := range entries {
+		byPath[entries[i].Path] = i // paths are unique: parseCatalog refused duplicates
+	}
+	return &Archive{cf: cf, dec: dec, lim: lim, info: g.info, entries: entries, byPath: byPath}, nil
 }
 
 // control is the decoded _ctlfile.
@@ -377,17 +397,31 @@ func (g *control) unlock(password string, lim Limits) ([]byte, error) {
 	if len(g.users) == 0 {
 		return nil, fmt.Errorf("%w: no password user (RSA key users only)", ErrUnsupported)
 	}
-	// Refuse before deriving anything.
+	// Refuse before deriving anything: every length and count that sets the
+	// cost of a derivation comes from the file.
+	var total, maxPBE uint64
 	for _, u := range g.users {
+		h, err := hashFor(u.hash)
+		if err != nil {
+			return nil, err
+		}
+		if len(u.pbaSum) == 0 || len(u.pbaSum) > h.size || len(u.pbaSalt) > maxSalt || len(u.pbeSalt) > maxSalt || len(u.files) > maxSalt {
+			return nil, fmt.Errorf("%w: user %q has a pba_checksum of %d bytes (1 to %d allowed), salts of %d and %d bytes, a key of %d bytes (%d allowed)",
+				ErrFormat, u.login, len(u.pbaSum), h.size, len(u.pbaSalt), len(u.pbeSalt), len(u.files), maxSalt)
+		}
 		if uint64(u.pbaIter) > uint64(lim.MaxIterations) || uint64(u.pbeIter) > uint64(lim.MaxIterations) {
 			return nil, fmt.Errorf("%w: user %q declares %d/%d iterations, limit %d", ErrLimit, u.login, u.pbaIter, u.pbeIter, lim.MaxIterations)
 		}
 		if u.pbaIter == 0 || u.pbeIter == 0 {
 			return nil, fmt.Errorf("%w: user %q declares zero iterations", ErrFormat, u.login)
 		}
-		if _, err := hashFor(u.hash); err != nil {
-			return nil, err
-		}
+		total += uint64(u.pbaIter) // one pass: the check is at most one hash output
+		maxPBE = max(maxPBE, uint64(u.pbeIter))
+	}
+	// Worst case: every user's check, then the key and the IV of one user (a
+	// 32-byte key from SHA-1 takes two passes).
+	if total += 3 * maxPBE; total > uint64(lim.MaxTotalIterations) {
+		return nil, fmt.Errorf("%w: %d hash iterations asked for, limit %d", ErrLimit, total, lim.MaxTotalIterations)
 	}
 	if g.info.KeyBytes != 16 && g.info.KeyBytes != 24 && g.info.KeyBytes != 32 {
 		return nil, fmt.Errorf("%w: encryption_strength %d", ErrUnsupported, g.info.KeyBytes)
@@ -451,24 +485,73 @@ func parseCatalog(blob []byte, d *decryptor, lim Limits) ([]Entry, error) {
 		byID[e.ID] = len(entries)
 		entries = append(entries, e)
 	}
-	paths := make([]string, len(entries))
-	var zero [16]byte
-	for i := range entries {
-		// Walk to the top; a chain longer than the catalog is a cycle.
-		path, cur := entries[i].Name, entries[i].parent
-		for steps := 0; cur != zero; steps++ {
-			j, ok := byID[cur]
-			if !ok || steps > len(entries) || !entries[j].Dir {
-				return nil, fmt.Errorf("%w: entry %q has a missing, non-directory or cyclic parent", ErrFormat, entries[i].Name)
-			}
-			path, cur = entries[j].Name+"/"+path, entries[j].parent
-		}
-		paths[i] = path
+	if err := buildPaths(entries, byID, lim); err != nil {
+		return nil, err
 	}
+	seen := make(map[string]struct{}, len(entries))
 	for i := range entries {
-		entries[i].Path = paths[i]
+		if _, dup := seen[entries[i].Path]; dup {
+			return nil, fmt.Errorf("%w: two entries at %q", ErrFormat, entries[i].Path)
+		}
+		seen[entries[i].Path] = struct{}{}
 	}
 	return entries, nil
+}
+
+// buildPaths sets every entry's Path in linear time: each path is its
+// parent's plus a name, computed once and parents first. Depth and path length
+// are bounded before any string is built, so a hostile chain of parents costs
+// a counter, not a quadratic amount of copying.
+func buildPaths(entries []Entry, byID map[[16]byte]int, lim Limits) error {
+	const (
+		unseen = iota
+		visiting
+		done
+	)
+	state := make([]uint8, len(entries))
+	depth := make([]int, len(entries))
+	plen := make([]int, len(entries))
+	var zero [16]byte
+	var chain []int
+	for i := range entries {
+		// Climb to the first resolved ancestor (or the top), marking the way.
+		chain = chain[:0]
+		for cur := i; state[cur] != done; {
+			if state[cur] == visiting {
+				return fmt.Errorf("%w: entry %q is its own ancestor", ErrFormat, entries[cur].Name)
+			}
+			state[cur] = visiting
+			chain = append(chain, cur)
+			p := entries[cur].parent
+			if p == zero {
+				break
+			}
+			j, ok := byID[p]
+			if !ok || !entries[j].Dir {
+				return fmt.Errorf("%w: entry %q has a missing or non-directory parent", ErrFormat, entries[cur].Name)
+			}
+			cur = j
+		}
+		// Resolve from the top of the chain down.
+		for k := len(chain) - 1; k >= 0; k-- {
+			e := chain[k]
+			d, l := 1, len(entries[e].Name)
+			if p := entries[e].parent; p != zero {
+				j := byID[p]
+				d, l = depth[j]+1, plen[j]+1+l
+			}
+			if d > lim.MaxDepth || l > lim.MaxPathBytes {
+				return fmt.Errorf("%w: entry %q is %d levels deep with a path of %d bytes (limits %d and %d)",
+					ErrLimit, entries[e].Name, d, l, lim.MaxDepth, lim.MaxPathBytes)
+			}
+			depth[e], plen[e], state[e] = d, l, done
+			entries[e].Path = entries[e].Name
+			if p := entries[e].parent; p != zero {
+				entries[e].Path = entries[byID[p]].Path + "/" + entries[e].Name
+			}
+		}
+	}
+	return nil
 }
 
 func parseEntry(b []byte, d *decryptor) (Entry, error) {
@@ -496,7 +579,7 @@ func parseEntry(b []byte, d *decryptor) (Entry, error) {
 	if err != nil {
 		return e, err
 	}
-	if e.Name == "" || e.Name == "." || e.Name == ".." || strings.ContainsAny(e.Name, "/\\\x00") {
+	if !usableName(e.Name) {
 		return e, fmt.Errorf("%w: unusable file name %q", ErrFormat, e.Name)
 	}
 	if v, ok := t.first(tagFileSize); ok {
@@ -527,6 +610,23 @@ func parseEntry(b []byte, d *decryptor) (Entry, error) {
 		e.Dir = n == 1
 	}
 	return e, nil
+}
+
+// usableName refuses names that would escape a directory or name a device
+// when extracted: empty, "." and "..", the separators / and \, ':' (drive
+// letters, NTFS streams), NUL, and the Windows reserved names (CON, PRN, AUX,
+// NUL, COM1-9, LPT1-9), alone or followed by an extension.
+func usableName(n string) bool {
+	if n == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\\:\x00") {
+		return false
+	}
+	base, _, _ := strings.Cut(n, ".")
+	switch b := strings.ToUpper(strings.TrimRight(base, " ")); b {
+	case "CON", "PRN", "AUX", "NUL":
+		return false
+	default:
+		return !(len(b) == 4 && (b[:3] == "COM" || b[:3] == "LPT") && b[3] >= '1' && b[3] <= '9')
+	}
 }
 
 func leUint64(b []byte) uint64 {

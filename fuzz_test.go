@@ -3,8 +3,11 @@ package zed
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -40,9 +43,40 @@ func TestWriteSeeds(t *testing.T) {
 		x := a
 		x.users = append([]tUser(nil), a.users...)
 		mod(&x)
-		if err := os.WriteFile(filepath.Join("testdata", name), x.bytes(t), 0o644); err != nil {
+		data := x.bytes(t)
+		if err := os.WriteFile(filepath.Join("testdata", name), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		writeFuzzSeed(t, "FuzzOpen", strings.TrimSuffix(name, ".zed"), data)
+	}
+	// Hostile shapes for the other parsers.
+	d := testDecryptor(t)
+	writeFuzzSeed(t, "FuzzControl", "valid", a.control(t))
+	writeFuzzSeed(t, "FuzzControl", "pba-8k", small().with(ed{"user", tagPBAChecksum, make([]byte, 8<<10)}).control(t))
+	writeFuzzSeed(t, "FuzzControl", "pba-empty", small().with(ed{"user", tagPBAChecksum, []byte{}}).control(t))
+	writeFuzzSeed(t, "FuzzControl", "version-0100-empty", obfuscate("0100", make([]byte, 16), nil))
+	writeFuzzSeed(t, "FuzzCatalog", "chain-5", chain(5, 3))
+	writeFuzzSeed(t, "FuzzCatalog", "chain-300", chain(300, 2))
+	writeFuzzSeed(t, "FuzzCatalog", "cycle", cat(halfEntry(0, 1, "a", true), halfEntry(1, 0, "b", true)))
+	writeFuzzSeed(t, "FuzzCatalog", "same-path", cat(halfEntry(1, -1, "x", false), halfEntry(2, -1, "x", false)))
+	writeFuzzSeed(t, "FuzzCatalog", "reserved-name", halfEntry(1, -1, "CON.txt", false))
+	writeFuzzSeed(t, "FuzzCatalog", "real-shape", cat(put(0x80100200, be32(4)), catEntry(d, 1, 0, "dir", true, 0), catEntry(d, 2, 1, "file", false, 5)))
+	for name, o := range map[string]olepsOpts{"dictionary": {}, "no-dictionary": {noDict: true}, "cp1252": {codepage: 1252, cpLast: true}, "seal": {extraBlob: true, dictLast: true}} {
+		writeFuzzSeed(t, "FuzzMetadata", name, oleps([]byte("ctl"), []byte("cat"), o))
+	}
+}
+
+// writeFuzzSeed stores one input of a fuzz target in testdata/fuzz, the
+// corpus `go test` replays and the fuzzer starts from.
+func writeFuzzSeed(t testing.TB, target, name string, data []byte) {
+	t.Helper()
+	dir := filepath.Join("testdata", "fuzz", target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf("go test fuzz v1\n[]byte(%s)\n", strconv.Quote(string(data)))
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -50,6 +84,11 @@ func TestSeedArchives(t *testing.T) {
 	files, _ := filepath.Glob("testdata/*.zed")
 	if len(files) != 3 {
 		t.Fatalf("%d seed archives, want 3", len(files))
+	}
+	for target, want := range map[string]int{"FuzzOpen": 3, "FuzzControl": 4, "FuzzCatalog": 6, "FuzzMetadata": 4} {
+		if got, _ := filepath.Glob(filepath.Join("testdata", "fuzz", target, "*")); len(got) != want {
+			t.Errorf("testdata/fuzz/%s holds %d inputs, want %d", target, len(got), want)
+		}
 	}
 	for _, p := range files {
 		a, err := OpenFile(p, "s3cret")
@@ -123,7 +162,7 @@ func FuzzCatalog(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		for _, mode := range []uint32{modeStream, modeCTS} {
 			dec, _ := newDecryptor(defaultArchive().key, defaultArchive().iv, mode)
-			if _, err := parseCatalog(b, dec, Limits{MaxEntries: 100}); !okErr(err) {
+			if _, err := parseCatalog(b, dec, Limits{MaxEntries: 100}.withDefaults()); !okErr(err) {
 				t.Fatalf("unexpected error %v", err)
 			}
 		}
