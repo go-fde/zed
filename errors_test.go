@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-fde/zed/internal/cfb/cfbtest"
+	"github.com/go-filesystems/cfb/cfbtest"
 )
 
 type ed struct {

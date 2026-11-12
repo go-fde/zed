@@ -16,7 +16,7 @@ import (
 	_ "golang.org/x/image/webp"
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/go-fde/zed/internal/cfb"
+	"github.com/go-filesystems/cfb"
 )
 
 // corpus returns the .zed files of the ZEDFREE corpus and the password in its

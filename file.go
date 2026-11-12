@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/go-fde/zed/internal/cfb"
+	"github.com/go-filesystems/cfb"
 )
 
 const batchChunks = 64 // chunks decrypted per read of the container

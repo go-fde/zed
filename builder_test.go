@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/go-fde/zed/internal/cfb/cfbtest"
+	"github.com/go-filesystems/cfb/cfbtest"
 )
 
 func cmpOr(a, b int) int {

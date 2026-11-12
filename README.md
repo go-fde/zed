@@ -24,8 +24,8 @@ reader; `WithLimits` replaces the defaults below.
 
 ## What it reads
 
-* the MS-CFB container (an internal reader: v3 and v4 sectors, FAT, DIFAT,
-  mini FAT, mini stream; see "The CFB reader" below);
+* the MS-CFB container (through go-filesystems/cfb: v3 and v4 sectors, FAT,
+  DIFAT, mini FAT, mini stream; see "The CFB reader" below);
 * the metadata stream, as MS-OLEPS (only the dictionary, the code page and
   `VT_BLOB` values), and in it `_ctlfile` (static-key AES obfuscation, TLV)
   and `_catalog` (TLV);
@@ -69,11 +69,12 @@ space and the Windows device names by the rules of Go's Windows
 `filepath.IsLocal`: CON, PRN, AUX, NUL, COM1-9 and LPT1-9 (superscript digits
 ¹ ² ³ included), CONIN$ and CONOUT$, with or without an extension; two entries
 with one path are refused too. Extracting by `Entry.Path` cannot escape a
-directory. The CFB layer bounds every chain by the number of sectors the file
-can hold, refuses cycles, refuses a mini stream shorter than its chains, and
-indexes directory children once. The parsers (`FuzzOpen`, `FuzzControl`,
-`FuzzCatalog`, `FuzzMetadata`, and the CFB `FuzzOpen`) run in CI; their
-corpora are committed in `testdata/fuzz/` and replayed by `go test`.
+directory. The CFB layer (go-filesystems/cfb) bounds every chain by the number
+of sectors the file can hold, refuses cycles and a mini stream shorter than its
+chains, and indexes directory children once. The parsers (`FuzzOpen`,
+`FuzzControl`, `FuzzCatalog`, `FuzzMetadata`) run in CI; their corpora are
+committed in `testdata/fuzz/` and replayed by `go test`. The CFB reader's own
+fuzzer runs in its repository.
 
 ## Tests
 
@@ -90,14 +91,14 @@ corpora are committed in `testdata/fuzz/` and replayed by `go test`.
   version (0100/0200), mode (103/104), key size (128/192/256) and hash
   (SHA-1/SHA-256), with nested directories, Unicode names and files around the
   512-byte chunk and 32 KiB batch boundaries; the refusal cases (damaged TLV,
-  OLEPS, CFB, zlib, limits) bring `zed` and the CFB reader to 100 % statement
+  OLEPS, zlib, limits, a damaged container) bring `zed` to 100 % statement
   coverage.
 * `TestTagsAsLiteralBytes` writes a whole `_ctlfile` and `_catalog` with the
   TLV tags as literal hex, independent of the constants the reader and the
   test writer share.
 * Regression tests for review findings: deep and cyclic catalogs, derivation
   inputs (`pba_checksum`, salts), total derivation work, reserved names,
-  duplicate paths, hostile CFB headers, a short mini stream.
+  duplicate paths.
 * `ZED_CORPUS=<folder>` runs `TestCorpus` on real containers: every `*.zed`
   in the folder, with the password on the first line of the folder's
   `README.md`. Without it the test skips loudly. The containers are never
@@ -145,14 +146,13 @@ global IV rests on the 2017 vectors only).
 
 ## The CFB reader
 
-`internal/cfb` is a generic MS-CFB reader with no dependency on the rest of
-the module: v3 and v4, FAT, DIFAT, mini FAT, mini stream, red-black directory
-trees (walked iteratively, each entry reached once), `io.ReaderAt` streams.
-It was written to live in `go-office/cfb`; creating that repository needs an
-organisation admin, so it stays internal for now and can be moved unchanged.
-Its tests use a test-only writer; no `.doc`/`.xls`/`.msg` produced by Word
-or LibreOffice was available to generate, and no Microsoft-made sample is
-committed.
+The container is read by
+[github.com/go-filesystems/cfb](https://github.com/go-filesystems/cfb) v0.1.0, a
+generic MS-CFB reader (v3 and v4, FAT, DIFAT, mini FAT, mini stream, red-black
+directory trees, `io.ReaderAt` streams) that was written for this module and
+moved there unchanged; it was `internal/cfb` in zed v0.1.0 to v0.2.0. Its
+chain bounds, cycle checks and fuzzing live in that repository, and zed's
+tests still build their archives with its `cfbtest` writer.
 
 ## Performance
 
