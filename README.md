@@ -48,13 +48,16 @@ and 200 000) and 40 000 000 hash iterations for all users together (a user
 costs its PBA count plus three times its PBE count, so one user at 10 000 000
 costs 40 000 000 and fits; when `MaxTotalIterations` is left zero it is four
 times `MaxIterations`), 64 users,
-100 000 entries nested at most 256 deep with paths of at most 4096 bytes,
-64 MiB of metadata, 4 GiB per decompressed file. Iteration counts, and the
+100 000 entries nested at most 256 deep with paths of at most 4096 bytes and
+64 MiB of paths in all (`MaxTotalPathBytes`: the paths are stored in full, so
+100 000 entries at the per-path cap would otherwise hold 400 MB), 64 MiB of
+metadata, 4 GiB per decompressed file. Iteration counts, and the
 lengths that set the cost of a derivation (`pba_checksum` between 1 byte and
 one hash output, salts and the wrapped key at most 256 bytes), are checked
 before any key derivation; a file size above the limit is refused too. The
-catalog's paths are built in linear time, parents first, after the depth and
-path caps are checked. A file is read through a reader that stops at its
+catalog's paths are built in linear time, parents first, after the depth, path
+and total-path caps are checked (no string is built for a catalog that is
+refused). A file is read through a reader that stops at its
 declared size: a zlib bomb that inflates past it is refused with `ErrFormat`
 after about that many bytes. `TestZlibBomb` (64 MiB of zeros in under 200 KiB)
 asserts that refusing it allocates under 8 MiB; that `TotalAlloc` check is the
