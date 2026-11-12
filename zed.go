@@ -51,6 +51,7 @@ type Limits struct {
 	MaxEntries         int   // files and directories in the catalog
 	MaxDepth           int   // directory nesting
 	MaxPathBytes       int   // length of an entry's slash-separated path
+	MaxTotalPathBytes  int   // bytes of all the entries' paths together
 	MaxMetadata        int64 // bytes of the metadata stream
 	MaxFileSize        int64 // decompressed bytes of one file
 }
@@ -58,10 +59,11 @@ type Limits struct {
 // DefaultLimits returns the limits Open uses: 10 million iterations for one
 // user (ZEDFREE writes 100000 and 200000) and 30 million hash iterations for
 // all of them, 64 users, 100000 entries nested at most 256 deep, paths of at
-// most 4096 bytes, 64 MiB of metadata and 4 GiB per file.
+// most 4096 bytes and 64 MiB of paths in all, 64 MiB of metadata and 4 GiB per
+// file.
 func DefaultLimits() Limits {
 	return Limits{MaxIterations: 10_000_000, MaxTotalIterations: 30_000_000, MaxUsers: 64, MaxEntries: 100_000,
-		MaxDepth: 256, MaxPathBytes: 4096, MaxMetadata: 64 << 20, MaxFileSize: 4 << 30}
+		MaxDepth: 256, MaxPathBytes: 4096, MaxTotalPathBytes: 64 << 20, MaxMetadata: 64 << 20, MaxFileSize: 4 << 30}
 }
 
 func (l Limits) withDefaults() Limits {
@@ -77,6 +79,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxPathBytes <= 0 {
 		l.MaxPathBytes = d.MaxPathBytes
+	}
+	if l.MaxTotalPathBytes <= 0 {
+		l.MaxTotalPathBytes = d.MaxTotalPathBytes
 	}
 	if l.MaxUsers <= 0 {
 		l.MaxUsers = d.MaxUsers
@@ -513,6 +518,8 @@ func buildPaths(entries []Entry, byID map[[16]byte]int, lim Limits) error {
 	plen := make([]int, len(entries))
 	var zero [16]byte
 	var chain []int
+	order := make([]int, 0, len(entries)) // parents before children
+	var total int64                       // bytes of all the paths together
 	for i := range entries {
 		// Climb to the first resolved ancestor (or the top), marking the way.
 		chain = chain[:0]
@@ -544,11 +551,18 @@ func buildPaths(entries []Entry, byID map[[16]byte]int, lim Limits) error {
 				return fmt.Errorf("%w: entry %q is %d levels deep with a path of %d bytes (limits %d and %d)",
 					ErrLimit, entries[e].Name, d, l, lim.MaxDepth, lim.MaxPathBytes)
 			}
-			depth[e], plen[e], state[e] = d, l, done
-			entries[e].Path = entries[e].Name
-			if p := entries[e].parent; p != zero {
-				entries[e].Path = entries[byID[p]].Path + "/" + entries[e].Name
+			if total += int64(l); total > int64(lim.MaxTotalPathBytes) {
+				return fmt.Errorf("%w: the paths of the catalog hold more than %d bytes together (go-fde/zed#3)", ErrLimit, lim.MaxTotalPathBytes)
 			}
+			depth[e], plen[e], state[e] = d, l, done
+			order = append(order, e)
+		}
+	}
+	// The bytes are now bounded: build the strings, parents first.
+	for _, e := range order {
+		entries[e].Path = entries[e].Name
+		if p := entries[e].parent; p != zero {
+			entries[e].Path = entries[byID[p]].Path + "/" + entries[e].Name
 		}
 	}
 	return nil
