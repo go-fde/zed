@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-fde/zed/internal/cfb"
+	"github.com/go-filesystems/cfb"
 )
 
 // maxSalt bounds the salts and the wrapped key, whose lengths come from the
