@@ -159,20 +159,24 @@ func TestDuplicatePathsAreRefused(t *testing.T) {
 func TestUnusableNames(t *testing.T) {
 	bad := []string{"", ".", "..", "a/b", `a\b`, "a:b", "C:", "file:stream", "a\x00b",
 		"CON", "con", "PRN", "AUX", "NUL", "COM1", "com9", "LPT1", "lpt9",
-		"CON.txt", "nul.tar.gz", "Aux.x", "COM5.dat", "con ", "LPT3 .txt"}
+		"CON.txt", "nul.tar.gz", "Aux.x", "COM5.dat", "con ", "LPT3 .txt",
+		// go-fde/zed#5: what Go's Windows filepath.IsLocal refuses, on every OS.
+		"a.", "a ", "file.txt.", "name  ", "x...", "CONIN$", "conin$", "CONOUT$", "ConOut$", "CONIN$.txt", "CONOUT$ .log",
+		"COM¹", "com²", "COM³.x", "LPT¹", "lpt² .txt", "LPT³"}
 	for _, n := range bad {
 		if usableName(n) {
 			t.Errorf("%q accepted", n)
 		}
 	}
-	good := []string{"a", "file.txt", "CONSOLE", "COM0", "COM10", "LPT0", "COMX", "xcon", "con-1.txt", "résumé ✓.txt", ".hidden", "a b", "NULL", "AUXILIARY.txt"}
+	good := []string{"a", "file.txt", "CONSOLE", "COM0", "COM10", "LPT0", "COMX", "xcon", "con-1.txt", "résumé ✓.txt", ".hidden", "a b", "NULL", "AUXILIARY.txt",
+		"CONIN", "CONOUT", "CONIN$$", "COM¹¹", "COM⁴", "COM½", "LPT´", "a.b", "a .b", "à la carte"}
 	for _, n := range good {
 		if !usableName(n) {
 			t.Errorf("%q refused", n)
 		}
 	}
 	// And through a whole archive.
-	for _, name := range []string{"a:b", "CON", "nul.txt", "LPT1"} {
+	for _, name := range []string{"a:b", "CON", "nul.txt", "LPT1", "CONIN$", "COM²", "trailing.", "trailing "} {
 		a := defaultArchive()
 		a.root = []*tNode{{name: name, data: []byte("x")}}
 		expect(t, "name "+name, a, ErrFormat)
