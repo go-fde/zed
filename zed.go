@@ -408,8 +408,13 @@ func (g *control) unlock(password string, lim Limits) ([]byte, error) {
 	if len(g.users) == 0 {
 		return nil, fmt.Errorf("%w: no password user (RSA key users only)", ErrUnsupported)
 	}
+	if g.info.KeyBytes != 16 && g.info.KeyBytes != 24 && g.info.KeyBytes != 32 {
+		return nil, fmt.Errorf("%w: encryption_strength %d", ErrUnsupported, g.info.KeyBytes)
+	}
 	// Refuse before deriving anything: every length and count that sets the
-	// cost of a derivation comes from the file.
+	// cost of a derivation comes from the file. The budget is in PKCS#12
+	// SHA-256 rounds: an iteration of PBKDF2-HMAC-SHA-512 counts as many as it
+	// costs, and each scheme is counted as it derives.
 	var total, maxPBE uint64
 	for _, u := range g.users {
 		h, err := hashFor(u.hash)
@@ -420,30 +425,33 @@ func (g *control) unlock(password string, lim Limits) ([]byte, error) {
 			return nil, fmt.Errorf("%w: user %q has a pba_checksum of %d bytes (1 to %d allowed), salts of %d and %d bytes, a key of %d bytes (%d allowed)",
 				ErrFormat, u.login, len(u.pbaSum), h.size, len(u.pbaSalt), len(u.pbeSalt), len(u.files), maxSalt)
 		}
-		if uint64(u.pbaIter) > uint64(lim.MaxIterations) || uint64(u.pbeIter) > uint64(lim.MaxIterations) {
-			return nil, fmt.Errorf("%w: user %q declares %d/%d iterations, limit %d", ErrLimit, u.login, u.pbaIter, u.pbeIter, lim.MaxIterations)
+		if uint64(u.pbaIter)*h.weight() > uint64(lim.MaxIterations) || uint64(u.pbeIter)*h.weight() > uint64(lim.MaxIterations) {
+			return nil, fmt.Errorf("%w: user %q declares %d/%d iterations of weight %d, limit %d", ErrLimit, u.login, u.pbaIter, u.pbeIter, h.weight(), lim.MaxIterations)
 		}
 		if u.pbaIter == 0 || u.pbeIter == 0 {
 			return nil, fmt.Errorf("%w: user %q declares zero iterations", ErrFormat, u.login)
 		}
-		total += uint64(u.pbaIter) // one pass: the check is at most one hash output
-		maxPBE = max(maxPBE, uint64(u.pbeIter))
+		pba, pbe := h.cost(uint64(u.pbaIter), uint64(u.pbeIter), g.info.KeyBytes)
+		total += pba // every user's check is tried
+		maxPBE = max(maxPBE, pbe)
 	}
-	// Worst case: every user's check, then the key and the IV of one user (a
-	// 32-byte key from SHA-1 takes two passes).
-	if total += 3 * maxPBE; total > uint64(lim.MaxTotalIterations) {
-		return nil, fmt.Errorf("%w: %d hash iterations asked for, limit %d", ErrLimit, total, lim.MaxTotalIterations)
-	}
-	if g.info.KeyBytes != 16 && g.info.KeyBytes != 24 && g.info.KeyBytes != 32 {
-		return nil, fmt.Errorf("%w: encryption_strength %d", ErrUnsupported, g.info.KeyBytes)
+	// Worst case: every user's check, then the key and the IV of one user.
+	if total += maxPBE; total > uint64(lim.MaxTotalIterations) {
+		return nil, fmt.Errorf("%w: %d SHA-256 rounds asked for, limit %d", ErrLimit, total, lim.MaxTotalIterations)
 	}
 	for _, u := range g.users {
 		h, _ := hashFor(u.hash)
-		sum := h.check(password, u.pbaSalt, int(u.pbaIter), len(u.pbaSum))
+		sum, err := h.check(password, u.pbaSalt, int(u.pbaIter), len(u.pbaSum))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrUnsupported, err)
+		}
 		if subtle.ConstantTimeCompare(sum, u.pbaSum) != 1 {
 			continue
 		}
-		kek, iv := h.keyIV(password, u.pbeSalt, int(u.pbeIter), g.info.KeyBytes)
+		kek, iv, err := h.keyIV(password, u.pbeSalt, int(u.pbeIter), g.info.KeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrUnsupported, err)
+		}
 		return unwrapKey(kek, iv, u.files)
 	}
 	return nil, ErrPassword

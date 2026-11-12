@@ -45,11 +45,20 @@ the on-the-fly folder variant.
 
 ## Limits (untrusted input)
 
-`DefaultLimits()`: 10 000 000 iterations for one user (ZED! Free writes 100 000
-and 200 000) and 40 000 000 hash iterations for all users together (a user
-costs its PBA count plus three times its PBE count, so one user at 10 000 000
-costs 40 000 000 and fits; when `MaxTotalIterations` is left zero it is four
-times `MaxIterations`), 64 users,
+`DefaultLimits()`: the key derivation budget is counted in PKCS#12 SHA-256
+rounds, the unit of the iteration counts below. One PBKDF2-HMAC-SHA-512
+iteration (hash 43) is charged as 5 of them: measured with `go test -bench
+KDFRound` on an Apple M4 Max, one core, 1-minute load 7.8, a PKCS#12 SHA-256
+round takes 46.4 ns (SHA-1 40.2 ns) and a PBKDF2-HMAC-SHA-512 iteration 225.3
+ns, a ratio of 4.86. A user may declare up to 10 000 000 units (ZED! Free writes
+100 000 and 200 000 iterations; hash 43 counts 5 each, so up to 2 000 000
+iterations), and all users together 40 000 000. Each scheme is counted as it
+derives: a user costs its check, plus (for the one user whose password is
+tried right) its key and IV, which cost two PKCS#12 SHA-256 passes, three with
+SHA-1, and one PBKDF2 pass. When `MaxTotalIterations` is left zero it is four
+times `MaxIterations`. At the defaults a hostile header costs at most about
+1.9 s of derivation on that core (40 000 000 × 46.4 ns), whichever hash it
+names; the refusal comes before any derivation. 64 users,
 100 000 entries nested at most 256 deep with paths of at most 4096 bytes and
 64 MiB of paths in all (`MaxTotalPathBytes`: the paths are stored in full, so
 100 000 entries at the per-path cap would otherwise hold 400 MB), 64 MiB of

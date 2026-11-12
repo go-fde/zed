@@ -1,11 +1,10 @@
 package zed
 
 import (
-	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
-	"encoding/binary"
 	"fmt"
 	"hash"
 	"unicode/utf16"
@@ -19,6 +18,13 @@ const (
 	// PBKDF2-HMAC-SHA-512 with the password in UTF-8.
 	hashPBKDF2SHA512 = 43
 )
+
+// pbkdf2SHA512Weight is the cost of one PBKDF2-HMAC-SHA-512 iteration in
+// PKCS#12 SHA-256 rounds, the unit of the iteration budget. Measured with
+// BenchmarkKDFRound on an Apple M4 Max, one core, 1-minute load 7.8, six rounds:
+// 46.4 ns per PKCS#12 SHA-256 round (40.2 for SHA-1) and 225.3 ns per
+// PBKDF2-HMAC-SHA-512 iteration, a ratio of 4.86, rounded up to 5.
+const pbkdf2SHA512Weight = 5
 
 // PKCS#12 diversifier IDs (RFC 7292, appendix B.3).
 const (
@@ -37,51 +43,56 @@ type hashSpec struct {
 	hmacHash func() hash.Hash // non-nil: PBKDF2-HMAC with this hash, UTF-8 password
 }
 
-// check derives the n bytes of the password check (PBA).
-func (h hashSpec) check(password string, salt []byte, iter, n int) []byte {
+// pbkdf2Key is replaceable so that a test can make it fail, which the standard
+// library does only in FIPS-only mode.
+var pbkdf2Key = func(h func() hash.Hash, password string, salt []byte, iter, n int) ([]byte, error) {
+	return pbkdf2.Key(h, password, salt, iter, n)
+}
+
+// weight is the cost of one iteration in PKCS#12 SHA-256 rounds.
+func (h hashSpec) weight() uint64 {
 	if h.hmacHash != nil {
-		return pbkdf2HMAC(h.hmacHash, []byte(password), salt, iter, n)
+		return pbkdf2SHA512Weight
 	}
-	return pkcs12KDF(h, bmpPassword(password), salt, idMAC, iter, n)
+	return 1
+}
+
+// cost is the work, in PKCS#12 SHA-256 rounds, of the two derivations a user's
+// header asks for: pba for the password check, pbe for the key and the IV,
+// each as the scheme really derives. PKCS#12 derives the key from 32 bytes and
+// the IV from 16, each a pass of the hash (the key two passes with SHA-1); PBKDF2
+// derives key and IV together, one pass of 64 bytes for keys up to 48.
+func (h hashSpec) cost(pbaIter, pbeIter uint64, keyLen int) (pba, pbe uint64) {
+	if h.hmacHash != nil {
+		passes := uint64(keyLen+16+h.size-1) / uint64(h.size)
+		return pbaIter * h.weight(), pbeIter * h.weight() * passes
+	}
+	passes := uint64((32+h.size-1)/h.size + 1)
+	return pbaIter, pbeIter * passes
+}
+
+// check derives the n bytes of the password check (PBA).
+func (h hashSpec) check(password string, salt []byte, iter, n int) ([]byte, error) {
+	if h.hmacHash != nil {
+		return pbkdf2Key(h.hmacHash, password, salt, iter, n)
+	}
+	return pkcs12KDF(h, bmpPassword(password), salt, idMAC, iter, n), nil
 }
 
 // keyIV derives the key that unwraps the archive key, keyLen bytes, and its
 // 16-byte IV (PBE). With PBKDF2 they are consecutive bytes of one derivation;
 // the PKCS#12 KDF derives them separately (IDs 1 and 2), the key from 32 bytes
 // cut to keyLen.
-func (h hashSpec) keyIV(password string, salt []byte, iter, keyLen int) (key, iv []byte) {
+func (h hashSpec) keyIV(password string, salt []byte, iter, keyLen int) (key, iv []byte, err error) {
 	if h.hmacHash != nil {
-		d := pbkdf2HMAC(h.hmacHash, []byte(password), salt, iter, keyLen+16)
-		return d[:keyLen], d[keyLen:]
+		d, err := pbkdf2Key(h.hmacHash, password, salt, iter, keyLen+16)
+		if err != nil {
+			return nil, nil, err
+		}
+		return d[:keyLen], d[keyLen:], nil
 	}
 	pw := bmpPassword(password)
-	return pkcs12KDF(h, pw, salt, idKey, iter, 32)[:keyLen], pkcs12KDF(h, pw, salt, idIV, iter, 16)
-}
-
-// pbkdf2HMAC is PBKDF2 (RFC 8018) with HMAC over the given hash.
-func pbkdf2HMAC(newHash func() hash.Hash, password, salt []byte, iter, n int) []byte {
-	mac := hmac.New(newHash, password)
-	size := mac.Size()
-	out := make([]byte, 0, n+size)
-	var counter [4]byte
-	for block := 1; len(out) < n; block++ {
-		binary.BigEndian.PutUint32(counter[:], uint32(block))
-		mac.Reset()
-		mac.Write(salt)
-		mac.Write(counter[:])
-		u := mac.Sum(nil)
-		t := append([]byte(nil), u...)
-		for i := 1; i < iter; i++ {
-			mac.Reset()
-			mac.Write(u)
-			u = mac.Sum(u[:0])
-			for j := range t {
-				t[j] ^= u[j]
-			}
-		}
-		out = append(out, t...)
-	}
-	return out[:n]
+	return pkcs12KDF(h, pw, salt, idKey, iter, 32)[:keyLen], pkcs12KDF(h, pw, salt, idIV, iter, 16), nil
 }
 
 func hashFor(id uint32) (hashSpec, error) {
