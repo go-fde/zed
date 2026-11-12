@@ -127,7 +127,7 @@ func TestStreaming(t *testing.T) {
 	a := defaultArchive()
 	a.root = []*tNode{{name: "noise", data: random(70_000, 9)}}
 	arch, _ := open(t, a.bytes(t), "s3cret")
-	r, err := arch.Open(arch.Lookup("noise"))
+	r, err := arch.Open(entry(t, arch, "noise"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestUsers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", pw, err)
 		}
-		if b, _ := arch.ReadFile(arch.Lookup("f")); string(b) != "hello" {
+		if b, _ := arch.ReadFile(entry(t, arch, "f")); string(b) != "hello" {
 			t.Fatalf("%s: %q", pw, b)
 		}
 		in := arch.Info()
@@ -207,7 +207,7 @@ func TestMetadataLayouts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if b, err := arch.ReadFile(arch.Lookup("f")); err != nil || string(b) != "x" {
+		if b, err := arch.ReadFile(entry(t, arch, "f")); err != nil || string(b) != "x" {
 			t.Fatalf("%s: %q %v", name, b, err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestOpenFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := arch.ReadFile(arch.Lookup("f")); string(b) != "on disk" {
+	if b, _ := arch.ReadFile(entry(t, arch, "f")); string(b) != "on disk" {
 		t.Fatalf("%q", b)
 	}
 	if err := arch.Close(); err != nil {

@@ -3,6 +3,8 @@ package zed
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -46,8 +48,8 @@ func mustHex(t testing.TB, s string) []byte {
 	return b
 }
 
-// The rule is by version: 0200 archives mix the file_id in, 0100 archives do not,
-// and an archive written one way is not readable the other way.
+// The rule is by version: 0200 archives mix the file_id in, 0100 archives do
+// not; each round-trips with its own rule.
 func TestPerFileIVRoundTrips(t *testing.T) {
 	for _, version := range []string{"0100", "0200"} {
 		a := defaultArchive()
@@ -57,17 +59,37 @@ func TestPerFileIVRoundTrips(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := arch.ReadFile(arch.Lookup("dir/file.txt")); err != nil || len(got) != 2000 {
+		if got, err := arch.ReadFile(entry(t, arch, "dir/file.txt")); err != nil || len(got) != 2000 {
 			t.Fatalf("version %s: %v", version, err)
 		}
 	}
-	// A 0200 archive written with the global IV: names come out garbled in
-	// their first block, so the entry is not where it was put.
+}
+
+// What reading a 0200 archive written with the global IV looks like: the
+// archive opens, but a wrong CBC IV spoils exactly the first block (8
+// characters) of every name and the first chunk of every file. This is the
+// symptom the real container showed before the per-file IV was found.
+func TestGlobalIVInA0200ArchiveGarblesTheFirstBlockOnly(t *testing.T) {
+	const name = "a-long-enough-file-name.txt"
 	a := defaultArchive()
 	a.globalIV = true
-	a.root = []*tNode{{name: "a-long-enough-file-name.txt", data: []byte("x")}}
+	a.root = []*tNode{{name: name, data: bytes.Repeat([]byte("y"), 3000)}}
 	arch, err := open(t, a.bytes(t), "s3cret")
-	if err == nil && arch.Lookup("a-long-enough-file-name.txt") != nil {
-		t.Fatal("a 0200 archive with global IVs was read as if it had per-file IVs")
+	if err != nil {
+		t.Fatalf("a garbled name should still open: %v", err)
+	}
+	es := arch.Entries()
+	if len(es) != 1 {
+		t.Fatalf("%d entries", len(es))
+	}
+	got := es[0].Name
+	if got == name || arch.Lookup(name) != nil {
+		t.Fatalf("the name came out intact: %q", got)
+	}
+	if !strings.HasSuffix(got, name[8:]) { // only the first 8 characters are lost
+		t.Fatalf("%q does not end with %q", got, name[8:])
+	}
+	if _, err := arch.ReadFile(&es[0]); !errors.Is(err, ErrFormat) { // zlib header of the first chunk
+		t.Fatalf("reading the file: %v", err)
 	}
 }

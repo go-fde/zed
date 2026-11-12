@@ -34,7 +34,7 @@ func BenchmarkReadFile10MiB(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	e := arch.Lookup("big")
+	e := entry(b, arch, "big")
 	b.Run("zed", func(b *testing.B) {
 		b.SetBytes(int64(len(text)))
 		b.ReportAllocs()
