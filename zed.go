@@ -437,15 +437,13 @@ func (g *control) unlock(password string, lim Limits) ([]byte, error) {
 	if g.info.KeyBytes != 16 && g.info.KeyBytes != 24 && g.info.KeyBytes != 32 {
 		return nil, fmt.Errorf("%w: encryption_strength %d", ErrUnsupported, g.info.KeyBytes)
 	}
-	pw := bmpPassword(password)
 	for _, u := range g.users {
 		h, _ := hashFor(u.hash)
-		sum := pkcs12KDF(h, pw, u.pbaSalt, idMAC, int(u.pbaIter), len(u.pbaSum))
+		sum := h.check(password, u.pbaSalt, int(u.pbaIter), len(u.pbaSum))
 		if subtle.ConstantTimeCompare(sum, u.pbaSum) != 1 {
 			continue
 		}
-		kek := pkcs12KDF(h, pw, u.pbeSalt, idKey, int(u.pbeIter), 32)[:g.info.KeyBytes]
-		iv := pkcs12KDF(h, pw, u.pbeSalt, idIV, int(u.pbeIter), aes.BlockSize)
+		kek, iv := h.keyIV(password, u.pbeSalt, int(u.pbeIter), g.info.KeyBytes)
 		return unwrapKey(kek, iv, u.files)
 	}
 	return nil, ErrPassword

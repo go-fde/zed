@@ -269,11 +269,9 @@ func (a tArchive) userTLV(t testing.TB, u tUser, idx int) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pw := bmpPassword(u.password)
 	pbeSalt := bytes.Repeat([]byte{byte(0xA0 + idx)}, 8)
 	pbaSalt := bytes.Repeat([]byte{byte(0xB0 + idx)}, 8)
-	kek := pkcs12KDF(h, pw, pbeSalt, idKey, int(u.iter), 32)[:cmpOr(a.kekLen, len(a.key))]
-	iv := pkcs12KDF(h, pw, pbeSalt, idIV, int(u.iter), 16)
+	kek, iv := h.keyIV(u.password, pbeSalt, int(u.iter), cmpOr(a.kekLen, len(a.key)))
 	blk, _ := aes.NewCipher(kek)
 	pad := aesBlock - len(a.key)%aesBlock
 	padded := append(append([]byte(nil), a.key...), bytes.Repeat([]byte{byte(pad)}, pad)...)
@@ -282,7 +280,7 @@ func (a tArchive) userTLV(t testing.TB, u tUser, idx int) []byte {
 	return a.box("acl", tagPasswordUser, "user",
 		a.p("user", tagLogin, u16(u.login)), a.p("user", 0x807e0100, []byte{1}),
 		a.p("user", tagFilesKeyCT, files), a.p("user", tagPBESalt, pbeSalt), a.p("user", tagPBEIter, be32(u.iter)),
-		a.p("user", tagHashFunc, be32(u.hash)), a.p("user", tagPBAChecksum, pkcs12KDF(h, pw, pbaSalt, idMAC, int(u.iter), 8)),
+		a.p("user", tagHashFunc, be32(u.hash)), a.p("user", tagPBAChecksum, h.check(u.password, pbaSalt, int(u.iter), 8)),
 		a.p("user", tagPBASalt, pbaSalt), a.p("user", tagPBAIter, be32(u.iter)))
 }
 

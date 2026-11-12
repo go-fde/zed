@@ -36,8 +36,16 @@ func corpus(t *testing.T) (files []string, password string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, _, _ := strings.Cut(string(b), "\n")
-	return files, strings.TrimRight(line, "\r")
+	// The password is the last non-empty line; lines before it (such as the
+	// version of the ZEDFREE that made the containers) are notes.
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i] != "" {
+			return files, lines[i]
+		}
+	}
+	t.Fatal("the corpus README.md is empty")
+	return nil, ""
 }
 
 // catalogSizes reads the sizes of the two metadata blobs, which the API does not
