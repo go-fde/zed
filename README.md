@@ -44,10 +44,10 @@ the on-the-fly folder variant.
 ## Limits (untrusted input)
 
 `DefaultLimits()`: 10 000 000 iterations for one user (ZED! Free writes 100 000
-and 200 000) and 30 000 000 hash iterations for all users together (the two do
-not fit: one user at 10 000 000 costs 10 000 000 + 3 × 10 000 000 = 40 000 000
-and is refused, so the real ceiling with equal PBA and PBE counts is about
-7 500 000, go-fde/zed#4), 64 users,
+and 200 000) and 40 000 000 hash iterations for all users together (a user
+costs its PBA count plus three times its PBE count, so one user at 10 000 000
+costs 40 000 000 and fits; when `MaxTotalIterations` is left zero it is four
+times `MaxIterations`), 64 users,
 100 000 entries nested at most 256 deep with paths of at most 4096 bytes,
 64 MiB of metadata, 4 GiB per decompressed file. Iteration counts, and the
 lengths that set the cost of a derivation (`pba_checksum` between 1 byte and

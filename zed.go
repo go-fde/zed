@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -45,8 +46,12 @@ var (
 // Limits bounds the work an archive can ask for. A zero field takes the value
 // of DefaultLimits.
 type Limits struct {
-	MaxIterations      int   // PBA/PBE iteration count one user may declare
-	MaxTotalIterations int   // hash iterations Open may be asked for, all users together
+	MaxIterations int // PBA/PBE iteration count one user may declare
+	// MaxTotalIterations bounds the hash iterations Open may be asked for, all
+	// users together: each user's PBA count, plus three times the largest PBE
+	// count (the key takes up to two passes, the IV one). Zero means four times
+	// MaxIterations, so that one user at MaxIterations always fits.
+	MaxTotalIterations int
 	MaxUsers           int   // password users examined
 	MaxEntries         int   // files and directories in the catalog
 	MaxDepth           int   // directory nesting
@@ -56,11 +61,11 @@ type Limits struct {
 }
 
 // DefaultLimits returns the limits Open uses: 10 million iterations for one
-// user (ZEDFREE writes 100000 and 200000) and 30 million hash iterations for
-// all of them, 64 users, 100000 entries nested at most 256 deep, paths of at
+// user (ZEDFREE writes 100000 and 200000) and 40 million hash iterations for
+// all of them (four times the first: one user at the limit fits), 64 users, 100000 entries nested at most 256 deep, paths of at
 // most 4096 bytes, 64 MiB of metadata and 4 GiB per file.
 func DefaultLimits() Limits {
-	return Limits{MaxIterations: 10_000_000, MaxTotalIterations: 30_000_000, MaxUsers: 64, MaxEntries: 100_000,
+	return Limits{MaxIterations: 10_000_000, MaxTotalIterations: 40_000_000, MaxUsers: 64, MaxEntries: 100_000,
 		MaxDepth: 256, MaxPathBytes: 4096, MaxMetadata: 64 << 20, MaxFileSize: 4 << 30}
 }
 
@@ -69,8 +74,8 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxIterations <= 0 {
 		l.MaxIterations = d.MaxIterations
 	}
-	if l.MaxTotalIterations <= 0 {
-		l.MaxTotalIterations = d.MaxTotalIterations
+	if l.MaxTotalIterations <= 0 { // four times the per-user limit, whatever that is
+		l.MaxTotalIterations = 4 * min(l.MaxIterations, math.MaxInt/4) // no overflow on 32 bits
 	}
 	if l.MaxDepth <= 0 {
 		l.MaxDepth = d.MaxDepth
