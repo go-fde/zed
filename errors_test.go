@@ -219,7 +219,7 @@ func TestUnknownItemsAreSkipped(t *testing.T) {
 	// A zero FILETIME is "not recorded".
 	a = small().with(ed{"entry", tagFileCreated, le64(0)})
 	arch, _ = open(t, a.bytes(t), "s3cret")
-	if !arch.Lookup("a").Created.IsZero() {
+	if !entry(t, arch, "a").Created.IsZero() {
 		t.Fatal("zero FILETIME is not the zero time")
 	}
 	// A metadata stream that is no property set.
@@ -251,7 +251,7 @@ func TestContainerRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := arch.ReadFile(arch.Lookup("a")); !errors.Is(err, ErrFormat) {
+	if _, err := arch.ReadFile(entry(t, arch, "a")); !errors.Is(err, ErrFormat) {
 		t.Errorf("damaged file stream: %v", err)
 	}
 	// A file whose stream is a storage, and one with no stream.
@@ -259,13 +259,13 @@ func TestContainerRefusals(t *testing.T) {
 	a.cfbExtra = []*cfbtest.Node{cfbtest.Storage(streamName(testID(1)))}
 	b2, _ := a.build(t)
 	arch, _ = open(t, b2, "s3cret")
-	if _, err := arch.Open(arch.Lookup("a")); !errors.Is(err, ErrFormat) {
+	if _, err := arch.Open(entry(t, arch, "a")); !errors.Is(err, ErrFormat) {
 		t.Errorf("stream is a storage: %v", err)
 	}
 	a = small().with(ed{"entry", tagFileID, nil})
 	_ = a
 	arch, _ = open(t, small().bytes(t), "s3cret")
-	e := *arch.Lookup("a")
+	e := *entry(t, arch, "a")
 	e.ID[0] ^= 0xFF
 	if _, err := arch.Open(&e); !errors.Is(err, ErrFormat) {
 		t.Errorf("no stream: %v", err)
@@ -273,13 +273,13 @@ func TestContainerRefusals(t *testing.T) {
 	if _, err := arch.ReadFile(&e); !errors.Is(err, ErrFormat) {
 		t.Errorf("ReadFile, no stream: %v", err)
 	}
-	if _, err := arch.ReadFile(arch.Lookup("d")); err == nil {
+	if _, err := arch.ReadFile(entry(t, arch, "d")); err == nil {
 		t.Error("ReadFile of a directory")
 	}
 	lim := small()
 	lim.root = []*tNode{{name: "big", data: bytes.Repeat([]byte{1}, 3000)}}
 	arch, _ = open(t, lim.bytes(t), "s3cret", WithLimits(Limits{MaxFileSize: 2000}))
-	if _, err := arch.Open(arch.Lookup("big")); !errors.Is(err, ErrLimit) {
+	if _, err := arch.Open(entry(t, arch, "big")); !errors.Is(err, ErrLimit) {
 		t.Errorf("file size limit: %v", err)
 	}
 }
@@ -314,7 +314,7 @@ func TestDamagedFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if _, err := arch.ReadFile(arch.Lookup("f")); !errors.Is(err, ErrFormat) {
+		if _, err := arch.ReadFile(entry(t, arch, "f")); !errors.Is(err, ErrFormat) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -345,7 +345,7 @@ func TestReadFailureIsNotAFormatError(t *testing.T) {
 		t.Fatal(err)
 	}
 	fl.armed = true
-	if _, err := arch.ReadFile(arch.Lookup("f")); !errors.Is(err, errDisk) || errors.Is(err, ErrFormat) {
+	if _, err := arch.ReadFile(entry(t, arch, "f")); !errors.Is(err, errDisk) || errors.Is(err, ErrFormat) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -377,7 +377,7 @@ func TestZlibBomb(t *testing.T) {
 	}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	_, err = arch.ReadFile(arch.Lookup("bomb"))
+	_, err = arch.ReadFile(entry(t, arch, "bomb"))
 	runtime.ReadMemStats(&after)
 	if !errors.Is(err, ErrFormat) || !strings.Contains(err.Error(), "longer than its declared size") {
 		t.Fatalf("bomb: %v", err)
@@ -389,7 +389,7 @@ func TestZlibBomb(t *testing.T) {
 	a = a.with(ed{"entry", tagFileSize, le64(1 << 40)})
 	arch, _ = open(t, a.bytes(t), "s3cret")
 	runtime.ReadMemStats(&before)
-	if _, err := arch.ReadFile(arch.Lookup("bomb")); !errors.Is(err, ErrLimit) {
+	if _, err := arch.ReadFile(entry(t, arch, "bomb")); !errors.Is(err, ErrLimit) {
 		t.Fatalf("declared 1 TiB: %v", err)
 	}
 	runtime.ReadMemStats(&after)
