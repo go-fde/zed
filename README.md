@@ -44,7 +44,10 @@ the on-the-fly folder variant.
 ## Limits (untrusted input)
 
 `DefaultLimits()`: 10 000 000 iterations for one user (ZED! Free writes 100 000
-and 200 000) and 30 000 000 hash iterations for all users together, 64 users,
+and 200 000) and 30 000 000 hash iterations for all users together (the two do
+not fit: one user at 10 000 000 costs 10 000 000 + 3 × 10 000 000 = 40 000 000
+and is refused, so the real ceiling with equal PBA and PBE counts is about
+7 500 000, go-fde/zed#4), 64 users,
 100 000 entries nested at most 256 deep with paths of at most 4096 bytes,
 64 MiB of metadata, 4 GiB per decompressed file. Iteration counts, and the
 lengths that set the cost of a derivation (`pba_checksum` between 1 byte and
@@ -57,9 +60,11 @@ after about that many bytes. `TestZlibBomb` (64 MiB of zeros in under 200 KiB)
 asserts that refusing it allocates under 8 MiB; that `TotalAlloc` check is the
 guard. The 128 MiB `debug.SetMemoryLimit` the test also sets is soft (the
 collector works harder, nothing is killed), so it is not a guard. File names
-with `/`, `\`, `:`, NUL, `.`, `..`, or a Windows reserved name (CON, PRN, AUX,
-NUL, COM1-9, LPT1-9, with or without an extension) are refused, as are two
-entries with one path, so extracting by `Entry.Path` cannot escape a
+containing `/`, `\`, `:` or NUL, and names that are exactly `.` or `..`, are
+refused (`note.txt` is fine), as are the Windows reserved names CON, PRN, AUX,
+NUL, COM1-9, LPT1-9 (with or without an extension) and two entries with one
+path. CONIN$, CONOUT$, superscript COM/LPT digits and names ending in a dot or
+a space still pass (go-fde/zed#5). Extracting by `Entry.Path` cannot escape a
 directory. The CFB layer bounds every chain by the number of sectors the file
 can hold, refuses cycles, refuses a mini stream shorter than its chains, and
 indexes directory children once. The parsers (`FuzzOpen`, `FuzzControl`,
