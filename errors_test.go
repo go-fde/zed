@@ -139,6 +139,7 @@ func TestFileKeyRefusals(t *testing.T) {
 
 func catEntry(d *decryptor, n int, parent int, name string, dir bool, size int) []byte {
 	id, pid := testID(n), testID(parent)
+	d = d.withFile(id) // per-file IV when the archive (version 0200) has one
 	props := cat(put(tagFileID, id[:]), put(tagNameCiphertext, d.encrypt(d.iv[:], nameBytes(name))), put(tagFileSize, le64(uint64(size))))
 	if parent != 0 {
 		props = cat(props, put(tagParentID, pid[:]))
@@ -154,6 +155,7 @@ func catEntry(d *decryptor, n int, parent int, name string, dir bool, size int) 
 func TestCatalogRefusals(t *testing.T) {
 	odd, empty := []byte{1, 2, 3}, []byte{}
 	d, _ := newDecryptor(defaultArchive().key, defaultArchive().iv, modeCTS)
+	d.perFile = true
 	cases := []struct {
 		name string
 		a    tArchive
@@ -206,6 +208,7 @@ func TestUnknownItemsAreSkipped(t *testing.T) {
 	// ZED! Free 2024.4 writes items this package does not know: skip them.
 	unknown := put(0x80100200, be32(4))
 	d, _ := newDecryptor(defaultArchive().key, defaultArchive().iv, modeCTS)
+	d.perFile = true
 	a := small()
 	a.extra = map[string][]byte{"acl": unknown, "top": unknown, "glob": unknown, "extra": unknown, "user": unknown}
 	a.rawCatalog = cat(unknown, catEntry(d, 1, 0, "f", false, 0), unknown)

@@ -103,7 +103,7 @@ func (a *Archive) Open(e *Entry) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFormat, err)
 	}
-	cr := &chunkReader{d: a.dec, s: s, raw: make([]byte, batchChunks*chunkSize)}
+	cr := &chunkReader{d: a.dec.withFile(e.ID), s: s, raw: make([]byte, batchChunks*chunkSize)}
 	zr, err := zlib.NewReader(cr)
 	if err != nil {
 		return nil, corrupt(err)

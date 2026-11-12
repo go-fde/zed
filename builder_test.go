@@ -229,6 +229,9 @@ type tArchive struct {
 	kekLen      int
 	cfbExtra    []*cfbtest.Node
 	dropStreams bool
+	// globalIV writes a 0200 archive with the global IV alone, the way the 2017
+	// document describes: a reader that knows the real rule must not read it.
+	globalIV bool
 }
 
 // p writes one item of a level, through the edit hook.
@@ -308,6 +311,7 @@ func (a tArchive) build(t testing.TB) ([]byte, cfbtest.Layout) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.perFile = a.version == "0200" && !a.globalIV
 	var catalog []byte
 	var streams []*cfbtest.Node
 	counter := 0
@@ -316,6 +320,7 @@ func (a tArchive) build(t testing.TB) ([]byte, cfbtest.Layout) {
 		for _, n := range nodes {
 			counter++
 			id := testID(counter)
+			d := d.withFile(id) // the per-file IV of version 0200 archives
 			isDir := n.dir || len(n.kids) > 0
 			props := cat(
 				a.p("entry", tagFileID, id[:]), a.p("entry", tagParentID, parent[:]),

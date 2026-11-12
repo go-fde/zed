@@ -89,6 +89,22 @@ type decryptor struct {
 	block cipher.Block
 	iv    [aesBlock]byte
 	mode  uint32
+	// perFile: the IV of a file's name and of its chunks is files_iv XOR the
+	// file's file_id. A ZED! Free 2024.4 container (version bytes 0200) does
+	// this; the 2017 document, written from version 0100 archives, has the
+	// global IV alone.
+	perFile bool
+}
+
+// withFile returns the decryptor of one file: with the file_id mixed into the
+// IV when the archive does that, otherwise d itself.
+func (d *decryptor) withFile(id [16]byte) *decryptor {
+	if !d.perFile {
+		return d
+	}
+	c := *d
+	xorInto(c.iv[:], d.iv[:], id[:])
+	return &c
 }
 
 func newDecryptor(key []byte, iv []byte, mode uint32) (*decryptor, error) {
