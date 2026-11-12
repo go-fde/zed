@@ -30,8 +30,10 @@ reader; `WithLimits` replaces the defaults below.
   `VT_BLOB` values), and in it `_ctlfile` (static-key AES obfuscation, TLV)
   and `_catalog` (TLV);
 * password users with PKCS#12 key derivation (RFC 7292 appendix B), SHA-1
-  (`pkcs12_hashfunc` 21) and SHA-256 (22): PBA is the password check, PBE
-  derives the key and IV that unwrap the archive key (AES-CBC, PKCS#7);
+  (`pkcs12_hashfunc` 21) and SHA-256 (22), or PBKDF2-HMAC-SHA-512 with the
+  password in UTF-8 (43, written by ZED! Free 2026.3): PBA is the password
+  check, PBE derives the key and IV that unwrap the archive key (AES-CBC,
+  PKCS#7);
 * AES-128/192/256 in the two end-of-stream modes, `STREAM` (103) and
   `CTS` (104, CBC-CS3), for file names and for the 512-byte chunks of file
   streams, whose IV is `AES-ECB(key, LE16(chunk) xor files_iv)`; then zlib.
@@ -43,11 +45,20 @@ the on-the-fly folder variant.
 
 ## Limits (untrusted input)
 
-`DefaultLimits()`: 10 000 000 iterations for one user (ZED! Free writes 100 000
-and 200 000) and 40 000 000 hash iterations for all users together (a user
-costs its PBA count plus three times its PBE count, so one user at 10 000 000
-costs 40 000 000 and fits; when `MaxTotalIterations` is left zero it is four
-times `MaxIterations`), 64 users,
+`DefaultLimits()`: the key derivation budget is counted in PKCS#12 SHA-256
+rounds, the unit of the iteration counts below. One PBKDF2-HMAC-SHA-512
+iteration (hash 43) is charged as 5 of them: measured with `go test -bench
+KDFRound` on an Apple M4 Max, one core, 1-minute load 7.8, a PKCS#12 SHA-256
+round takes 46.4 ns (SHA-1 40.2 ns) and a PBKDF2-HMAC-SHA-512 iteration 225.3
+ns, a ratio of 4.86. A user may declare up to 10 000 000 units (ZED! Free writes
+100 000 and 200 000 iterations; hash 43 counts 5 each, so up to 2 000 000
+iterations), and all users together 40 000 000. Each scheme is counted as it
+derives: a user costs its check, plus (for the one user whose password is
+tried right) its key and IV, which cost two PKCS#12 SHA-256 passes, three with
+SHA-1, and one PBKDF2 pass. When `MaxTotalIterations` is left zero it is four
+times `MaxIterations`. At the defaults a hostile header costs at most about
+1.9 s of derivation on that core (40 000 000 × 46.4 ns), whichever hash it
+names; the refusal comes before any derivation. 64 users,
 100 000 entries nested at most 256 deep with paths of at most 4096 bytes and
 64 MiB of paths in all (`MaxTotalPathBytes`: the paths are stored in full, so
 100 000 entries at the per-path cap would otherwise hold 400 MB), 64 MiB of
@@ -100,8 +111,9 @@ fuzzer runs in its repository.
   inputs (`pba_checksum`, salts), total derivation work, reserved names,
   duplicate paths.
 * `ZED_CORPUS=<folder>` runs `TestCorpus` on real containers: every `*.zed`
-  in the folder, with the password on the first line of the folder's
-  `README.md`. Without it the test skips loudly. The containers are never
+  in the folder, with the password on the last non-empty line of the folder's
+  `README.md` (a line before it, such as the ZEDFREE version, is a note). It
+  fails if any container does not open. Without it the test skips loudly. The containers are never
   committed. It extracts every entry and checks each file's length against
   the catalog, its path against `parent_directory_id`, and that images decode
   (`image.Decode`: random bytes from a wrong key, IV or chunk cannot). It
@@ -110,18 +122,24 @@ fuzzer runs in its repository.
   there (names compared after Unicode normalisation); the originals are read
   at run time and never copied anywhere.
 
-### Real-container interoperability (ZED! Free 2024.4)
+### Real-container interoperability (ZED! Free 2024.4 and 2026.3)
 
-One container made by ZED! Free 2024.4 was opened (not committed): it opens
-with its password, refuses a wrong one with `ErrPassword`, and holds a folder
-with one PNG screen capture (11 508 bytes, 292 × 234). The file is extracted
-byte for byte equal to the original, through the whole file-stream path:
-stream name from `file_id`, 512-byte chunks, CTS, zlib. What the container
-showed, and where the 2017 document does not match:
+Two containers were opened (not committed), one made by ZED! Free 2024.4 and
+one by ZED! Free 2026.3 (`zed-2026.zed`). Each opens with its password, refuses
+a wrong one with `ErrPassword`, and holds a folder with one PNG screen capture
+(11 508 bytes, 292 × 234). Each file is extracted byte for byte equal to the
+original, through the whole file-stream path: stream name from `file_id`,
+512-byte chunks, CTS, zlib. What the containers showed, and where the 2017
+document does not match (a row is for both unless it says otherwise; the
+2026.3 container has version bytes `0200`, mode 104 (CTS), a 16-byte key,
+200000 PBA and 100000 PBE iterations like the 2017 document's typical values,
+and the same catalog and file layout as 2024.4):
 
 | 2017 document | ZED! Free 2024.4 container |
 | --- | --- |
 | a file's name and chunks use the global `files_iv` ("the same key and IV") | the IV is `files_iv` **XOR the file's `file_id`** (raw bytes, not the shuffled stream name): `IV(file) = files_iv ^ file_id`, then the chunk IV is `AES-ECB(key, LE16(chunk) ^ IV(file))` as before. Found because the first 16 bytes of every name decrypted to garbage and the rest to text (a wrong CBC IV spoils one block), and `files_iv ^ file_id` was the value that makes the first block read "Capture ". Applied to archives whose version bytes are `0200`; `0100` archives (the 2017 ones) keep the global IV. Verified on one container; whether version `0200` or the 2024 release is what changed is not known. |
+| `pkcs12_hashfunc` is 21 (SHA-1) or 22 (SHA-256) | **2026.3 writes 43**: PBA and PBE are not PKCS#12 any more but **PBKDF2-HMAC-SHA-512** (RFC 8018) with the password as **UTF-8** (not UTF-16BE with a NUL). PBA is 8 bytes of the derivation from `pba_salt` and `pba_iter`; PBE is one derivation from `pbe_salt` and `pbe_iter` of `encryption_strength + 16` bytes: the first `encryption_strength` bytes are the key that unwraps `files_key_ciphertext`, the next 16 the IV. Found by trying the hash families, block sizes and password encodings against `pba_checksum` (only PBKDF2-HMAC-SHA-512 matched), then the IV offsets against a readable catalog (offset 16, i.e. right after a 16-byte key). The IV position for 24- and 32-byte keys is inferred (right after the key), not seen. |
+| created with `{00000188-1000-…}` (Zed! Free 1.0.188) | ZED! Free 2026.3: `{00000006-B030-3CA8-8868-36F59DEFD14D}` (2024.4: `{00000018-A040-…}`). |
 | file names are filename_ciphertext, "may have a trailing NUL" | UTF-16LE in NFC form (macOS composes é and à the same way); no NUL seen. |
 | `_ctlfile` is property index 3, `_catalog` index 4 | The dictionary names `_ctlfile` = property **4**, `_catalog` = **5**, and a third blob `_seal` = 6 (264 bytes). The names must be resolved through the dictionary; 3 and 4 are only a fallback here. |
 | delimiter followed by `0100` for the free version | `0200`. (John the Ripper's `zed2john` also reads `0100` as free and `0200` as paid.) The TLV layout is read the same. |
@@ -141,7 +159,8 @@ the same length says once). The test checks what the bytes hold.
 
 Not yet verified on a real container: several files, files under 16 bytes of
 ciphertext, nested folders deeper than one, several users, SHA-1, mode 103,
-24/32-byte keys, and any `0100` archive (so the rule that `0100` keeps the
+24/32-byte keys (for 2026.3: where the IV sits), other hash identifiers than
+21, 22 and 43, and any `0100` archive (so the rule that `0100` keeps the
 global IV rests on the 2017 vectors only).
 
 ## The CFB reader

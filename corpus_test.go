@@ -36,8 +36,16 @@ func corpus(t *testing.T) (files []string, password string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, _, _ := strings.Cut(string(b), "\n")
-	return files, strings.TrimRight(line, "\r")
+	// The password is the last non-empty line; lines before it (such as the
+	// version of the ZEDFREE that made the containers) are notes.
+	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i] != "" {
+			return files, lines[i]
+		}
+	}
+	t.Fatal("the corpus README.md is empty")
+	return nil, ""
 }
 
 // catalogSizes reads the sizes of the two metadata blobs, which the API does not
@@ -90,6 +98,7 @@ func TestCorpus(t *testing.T) {
 			byID[entries[i].ID] = &entries[i]
 		}
 		var zero [16]byte
+		here := struct{ extracted, inFolders, compared int }{} // this container alone
 		for i := range entries {
 			e := &entries[i]
 			t.Logf("  entry %q dir=%v size=%d parent-set=%v modified=%v", e.Path, e.Dir, e.Size, e.parent != zero, e.Modified)
@@ -113,8 +122,10 @@ func TestCorpus(t *testing.T) {
 				t.Errorf("  %s: extracted %d bytes, the catalog says %d", e.Path, len(b), e.Size)
 			}
 			extracted++
+			here.extracted++
 			if e.parent != zero {
 				inFolders++
+				here.inFolders++
 			}
 			if ref, found := referenceFor(t, e.Name); found {
 				form := "neither NFC nor NFD"
@@ -131,6 +142,7 @@ func TestCorpus(t *testing.T) {
 					t.Errorf("  %s: %d bytes extracted, the reference file has %d and differs", e.Path, len(b), len(ref))
 				}
 				compared++
+				here.compared++
 			}
 			if ext := strings.ToLower(filepath.Ext(e.Name)); imageExt[ext] {
 				img, format, err := image.Decode(bytes.NewReader(b))
@@ -143,6 +155,18 @@ func TestCorpus(t *testing.T) {
 			}
 		}
 		a.Close()
+		// Each container must show the file-stream path by itself: a total over
+		// several containers would let one of them extract nothing.
+		name := filepath.Base(p)
+		if here.extracted == 0 {
+			t.Errorf("%s: no file was extracted", name)
+		}
+		if here.inFolders == 0 {
+			t.Errorf("%s: no extracted file sits in a folder", name)
+		}
+		if os.Getenv("ZED_CORPUS_REFERENCE") != "" && here.compared == 0 {
+			t.Errorf("%s: no extracted file matched a reference file by name", name)
+		}
 		if _, err := OpenFile(p, pw+"x"); !errors.Is(err, ErrPassword) {
 			t.Errorf("%s: a wrong password gave %v", filepath.Base(p), err)
 		}
