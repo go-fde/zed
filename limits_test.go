@@ -33,11 +33,11 @@ func TestOneUserAtTheIterationLimitFits(t *testing.T) {
 func TestIterationLimitIsReachable(t *testing.T) {
 	// The budget counts PKCS#12 SHA-256 rounds. A user of 100 iterations costs
 	// its check plus its key and IV as the scheme derives them: SHA-1 100 + 3*100,
-	// SHA-256 100 + 2*100, and PBKDF2-HMAC-SHA-512 (weight 16) 1600 + 1600.
+	// SHA-256 100 + 2*100, and PBKDF2-HMAC-SHA-512 (weight 5) 500 + 500.
 	for _, c := range []struct {
 		hash          uint32
 		maxIter, need int
-	}{{hashSHA1, 100, 400}, {hashSHA256, 100, 300}, {hashPBKDF2SHA512, 100 * pbkdf2SHA512Weight, 2 * 100 * pbkdf2SHA512Weight}} {
+	}{{hashSHA1, 100, 400}, {hashSHA256, 100, 300}, {hashPBKDF2SHA512, 500, 1000}} {
 		a := small()
 		a.users = []tUser{{login: "u", password: "s3cret", hash: c.hash, iter: 100}}
 		data := a.bytes(t)
