@@ -61,10 +61,11 @@ asserts that refusing it allocates under 8 MiB; that `TotalAlloc` check is the
 guard. The 128 MiB `debug.SetMemoryLimit` the test also sets is soft (the
 collector works harder, nothing is killed), so it is not a guard. File names
 containing `/`, `\`, `:` or NUL, and names that are exactly `.` or `..`, are
-refused (`note.txt` is fine), as are the Windows reserved names CON, PRN, AUX,
-NUL, COM1-9, LPT1-9 (with or without an extension) and two entries with one
-path. CONIN$, CONOUT$, superscript COM/LPT digits and names ending in a dot or
-a space still pass (go-fde/zed#5). Extracting by `Entry.Path` cannot escape a
+refused (`note.txt` is fine), on every OS, as are names ending in a dot or a
+space and the Windows device names by the rules of Go's Windows
+`filepath.IsLocal`: CON, PRN, AUX, NUL, COM1-9 and LPT1-9 (superscript digits
+¹ ² ³ included), CONIN$ and CONOUT$, with or without an extension; two entries
+with one path are refused too. Extracting by `Entry.Path` cannot escape a
 directory. The CFB layer bounds every chain by the number of sectors the file
 can hold, refuses cycles, refuses a mini stream shorter than its chains, and
 indexes directory children once. The parsers (`FuzzOpen`, `FuzzControl`,

@@ -613,20 +613,42 @@ func parseEntry(b []byte, d *decryptor) (Entry, error) {
 }
 
 // usableName refuses names that would escape a directory or name a device
-// when extracted: empty, "." and "..", the separators / and \, ':' (drive
-// letters, NTFS streams), NUL, and the Windows reserved names (CON, PRN, AUX,
-// NUL, COM1-9, LPT1-9), alone or followed by an extension.
+// when extracted, on every OS: empty, "." and "..", the separators / and \,
+// ':' (drive letters, NTFS streams), NUL, a trailing dot or space (Windows
+// drops them, so "a." and "a" would collide), and the Windows reserved device
+// names, which are the rules of Go's filepath.IsLocal on Windows (CON, PRN,
+// AUX, NUL, COM1-9 and LPT1-9 with the superscript digits too, CONIN$ and
+// CONOUT$), alone or followed by an extension.
 func usableName(n string) bool {
 	if n == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\\:\x00") {
 		return false
 	}
-	base, _, _ := strings.Cut(n, ".")
-	switch b := strings.ToUpper(strings.TrimRight(base, " ")); b {
-	case "CON", "PRN", "AUX", "NUL":
+	if last := n[len(n)-1]; last == '.' || last == ' ' {
 		return false
-	default:
-		return !(len(b) == 4 && (b[:3] == "COM" || b[:3] == "LPT") && b[3] >= '1' && b[3] <= '9')
 	}
+	// A device name may be followed by anything after a dot, and by spaces.
+	base, _, _ := strings.Cut(n, ".")
+	return !reservedBase(strings.TrimRight(base, " "))
+}
+
+// reservedBase reports whether name is a Windows device name, ignoring ASCII
+// case (as Go does: only A-Z fold).
+func reservedBase(name string) bool {
+	up := []byte(name)
+	for i, c := range up {
+		if c >= 'a' && c <= 'z' {
+			up[i] = c - 'a' + 'A'
+		}
+	}
+	switch s := string(up); {
+	case s == "CON" || s == "PRN" || s == "AUX" || s == "NUL", s == "CONIN$", s == "CONOUT$":
+		return true
+	case len(s) == 4 && (s[:3] == "COM" || s[:3] == "LPT"):
+		return s[3] >= '1' && s[3] <= '9'
+	case len(s) == 5 && (s[:3] == "COM" || s[:3] == "LPT"): // COM¹ COM² COM³: C2 B9, C2 B2, C2 B3
+		return s[3] == 0xC2 && (s[4] == 0xB9 || s[4] == 0xB2 || s[4] == 0xB3)
+	}
+	return false
 }
 
 func leUint64(b []byte) uint64 {
