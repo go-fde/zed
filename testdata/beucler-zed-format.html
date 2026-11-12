@@ -1,0 +1,1349 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>.zed archive file format</title>
+    <link rel="stylesheet" type="text/css" href="../main.css" />
+  </head>
+  <body>
+<h1>.zed archive file format</h1>
+
+<p>Copyright (C) 2017  Sylvain Beucler</p>
+
+<p>Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.  This file is offered as-is,
+without any warranty.</p>
+
+<p><a href="https://www.beuc.net/zed/">https://www.beuc.net/zed/</a> (<a href="https://www.beuc.net/zed/zed.md">source</a>)</p>
+
+<p><a href="http://www.dachary.org/loic/zed/zedie.py">http://www.dachary.org/loic/zed/zedie.py</a> (POC extractor from Loïc Dachary)</p>
+
+<h2>Introduction</h2>
+
+<p>Archives with the .zed extension are conceptually similar to an
+encrypted .zip file.</p>
+
+<p>In addition to a specific format, .zed files support multiple users:
+files are encrypted using the archive master key, which itself is
+encrypted for each user and/or authentication method (password, RSA
+key through certificate or PKCS#11 token).  Metadata such as filenames
+is partially encrypted.</p>
+
+<p>.zed archives are used as stand-alone or attached to e-mails with the
+help of a MS Outlook plugin.  A variant, which is not covered here,
+can encrypt/decrypt MS Windows folders on the fly like
+<a href="http://ecryptfs.org/">ecryptfs</a>.</p>
+
+<p>In the spirit of academic and independent research this document
+provides a description of the file format and encryption algorithms
+for this encrypted file archive.</p>
+
+<p>See the <a href="#conventions-and-references">conventions</a> section for
+conventions and acronyms used in this document.</p>
+
+<h2>Structure overview</h2>
+
+<p>The .zed file format is composed of several layers.</p>
+
+<ul>
+<li><p>The main container is using the (MS-CFB), which is notably used by MS
+Office 97-2003 .doc files.  It contains several <em>streams</em>:</p>
+
+<ul>
+<li><p><a href="#metadata-stream">Metadata stream</a>: in OLE Property Set format
+(MS-OLEPS), contains 2 blobs in a specific Type-Length-Value
+(TLV) format:</p>
+
+<ul>
+<li><p><a href="#_ctlfile">_ctlfile</a>: global archive properties and access list <br />
+It is obfuscated by means of static-key AES encryption. <br />
+The properties include archive initial filename and a global IV. <br />
+A global encryption key is itself encrypted in each user entry.</p></li>
+<li><p><a href="#_catalog">_catalog</a>: file list <br />
+Contains each file metadata indexed with a 15-byte identifier. <br />
+Directories are supported. <br />
+Full filename is encrypted using AES. <br />
+File extension is (redundantly) stored in clear,
+and so are file metadata such as modification time.</p></li>
+</ul></li>
+<li><p>Each file in the archive compressed with zlib and encrypted with
+the standard AES algorithm, in a separate stream. <br />
+Several <a href="#encryption-schemes">encryption schemes</a> and key sizes
+are supported. <br />
+The <a href="#decrypting-files">file stream</a> is split in chunks of 512
+bytes, individually encrypted.</p></li>
+<li><p>Optional streams, contain additional metadata as well as pictures to
+display in the application background ("watermarks").  They are not
+discussed here.</p></li>
+</ul></li>
+</ul>
+
+<p>Or as a diagram:</p>
+
+<pre><code>+----------------------------------------------------------------------------------------------------+
+| .zed archive (MS-CBF)                                                                              |
+|                                                                                                    |
+|  stream #1                         stream #2                       stream #3...                    |
+| +------------------------------+  +---------------------------+  +---------------------------+     |
+| | metadata (MS-OLEPS)          |  | encryption (AES)          |  | encryption (AES)          |     |
+| |                              |  | 512-byte chunks           |  | 512-byte chunks           |     |
+| | +--------------------------+ |  |                           |  |                           |     |
+| | | obfuscation (static key) | |  | +-----------------------+ |  | +-----------------------+ |     |
+| | | +----------------------+ | |  |-| compression (zlib)    |-|  |-| compression (zlib)    |-|     |
+| | | |_ctlfile (TLV)        | | |  | |                       | |  | |                       | | ... |
+| | | +----------------------+ | |  | | +-------------------+ | |  | | +-------------------+ | |     | 
+| | +--------------------------+ |  | | | file contents     | | |  | | | file contents     | | |     |
+| |                              |  | | |                   | | |  | | |                   | | |     |
+| | +--------------------------+ |  |-| |                   | |-|  |-| |                   | |-|     |
+| | | _catalog (TLV)           | |  | | +-------------------+ | |  | | +-------------------+ | |     |
+| | +--------------------------+ |  | +-----------------------+ |  | +-----------------------+ |     |
+| +------------------------------+  +---------------------------+  +---------------------------+     |
++----------------------------------------------------------------------------------------------------+
+</code></pre>
+
+<h2>Encryption schemes <a name="encryption-schemes"></a></h2>
+
+<p>Several AES key sizes are supported, such as 128 and 256 bits.</p>
+
+<p>The Cipher Block Chaining (CBC) block cipher mode of operation is used
+to decrypt multiple AES 16-byte blocks, which means an initialisation
+vector (IV) is stored in clear along with the ciphertext.</p>
+
+<p>All filenames and file contents are encrypted using the same
+encryption mode, key and IV (e.g. if you remove and re-add a file in
+the archive, the resulting stream will be identical).</p>
+
+<p>No cleartext padding is used during encryption; instead, several
+end-of-stream handlers are available, so the ciphertext has exactly
+the size of the cleartext (e.g. the size of the compressed file).</p>
+
+<p>The following variants were identified in the 'encryption_mode'
+field from the metadata.</p>
+
+<h3>STREAM</h3>
+
+<p>This is the end-of-stream handler for:</p>
+
+<ul>
+<li>obfuscated metadata encrypted with static AES key</li>
+<li>filenames and files in archives with 'encryption_mode' set to "AES-CBC-STREAM"</li>
+<li>any AES ciphertext of size &lt; 16 bytes, regardless of encryption mode</li>
+</ul>
+
+<p>Its value for the 'encryption_mode' field is 103.</p>
+
+<p>This end-of-stream handler is apparently specific to the .zed format,
+and applied when the cleartext's does not end on a 16-byte boundary ;
+in this case special processing is performed on the last partial
+16-byte block.</p>
+
+<p>The encryption and decryption phases are identical: let's assume the
+last partial block of cleartext (for encryption) or ciphertext (for
+decryption) was appended after all the complete 16-byte blocks of
+ciphertext:</p>
+
+<ul>
+<li><p>the second-to-last block of the ciphertext is encrypted in AES ECB
+mode (i.e. block cipher encryption only, without XORing with the IV)</p></li>
+<li><p>then XOR-ed with the last partial block (hence truncated to the
+length of the partial block)</p></li>
+</ul>
+
+<p>In either case, if the full ciphertext is less then one AES block (&lt;
+16 bytes), then the IV is used instead of the second-to-last block.</p>
+
+<h3>CTS</h3>
+
+<p>CTS or CipherText Stealing is the end-of-stream handler for:</p>
+
+<ul>
+<li>filenames and files in archives with 'encryption_mode' set to "AES-CBC-CTS".
+<ul>
+<li>exception: if the size of the ciphertext is &lt; 16 bytes, then
+"STREAM" is used instead.</li>
+</ul></li>
+</ul>
+
+<p>Its value for the 'encryption_mode' field is 104.</p>
+
+<p>It matches the CBC-CS3 variant as described in <a href="http://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a-add.pdf">Recommendation for
+Block Cipher Modes of Operation: Three Variants of Ciphertext Stealing
+for CBC Mode</a>.</p>
+
+<h3>Empty cleartext</h3>
+
+<p>Since empty filenames or metadata are invalid, and since all files are
+compressed (resulting in a minimum 8-byte zlib cleartext), no empty
+cleartext was encrypted in the archive.</p>
+
+<h2>metadata stream <a name="metadata-stream"></a></h2>
+
+<p>It is named 05356861616161716149656b7a6565636e576a33317a7868304e63
+(hexadecimal), i.e. the character with code 5 followed by
+'5haaaaqaIekzeecnWj31zxh0Nc' (ASCII).</p>
+
+<p>The format used is OLE Property Set (MS-OLEPS).</p>
+
+<p>It introduces 2 property names "_ctlfile" (index 3) and "_catalog"
+(index 4), and 2 instances of said properties each containing an
+application-specific VT_BLOB (type 0x0041).</p>
+
+<h3>_ctlfile: obfuscated global properties and access list <a name="_ctlfile"></a></h3>
+
+<p>This subpart is stored under index 3 ("_ctlfile") of the MS-OLEPS
+metadata.</p>
+
+<p>It consists of:</p>
+
+<ul>
+<li>static delimiter 0765921A2A0774534752073361719300 (hexadecimal) followed by 0100 (hexadecimal) (18 bytes total)</li>
+<li>16-byte IV</li>
+<li>ciphertext</li>
+<li>1 uint32be representing the length of all the above</li>
+<li>static delimiter 0765921A2A0774534752073361719300 (hexadecimal) followed by "ZoneCentral (R)" (ASCII) and a NUL byte (32 bytes total)</li>
+</ul>
+
+<p>The ciphertext is encrypted with AES CBC "STREAM" mode using 128-bit
+static key 37F13CF81C780AF26B6A52654F794AEF (hexadecimal) and the
+prepended IV so as to obfuscate the access list. The ciphertext is
+continuous and not split in chunks (unlike files), even when it is
+larger than 512 bytes.</p>
+
+<p>The decrypted text contain properties in a <a href="#tlv-format">TLV format</a>
+as described in <a href="#_ctlfile-tlv">_ctlfile TLV</a>:</p>
+
+<ul>
+<li><p>global archive properties as a 'fileprops' structure,</p></li>
+<li><p>extra archive properties as a 'archive_extraprops' structure</p></li>
+<li><p>users access list as a series of 'passworduser' and 'rsauser
+entries.</p></li>
+</ul>
+
+<p>Archives may include "mandatory" users that cannot be removed. They
+are typically used to add an enterprise wide recovery RSA key to all
+archives. Extreme care must be taken to protect these key, as it can
+decrypt all past archives generated from within that company.</p>
+
+<h3>_catalog: file list <a name="_catalog"></a></h3>
+
+<p>This subpart is stored under index 4 ("_catalog") of the MS-OLEPS
+metadata.</p>
+
+<p>It contains a series of <a href="#_catalog-tlv">'fileprops'</a> TLV structures,
+one for each file or directory.</p>
+
+<p>The file hierarchy can be reconstructed by checking the 'parent_id'
+field of each file entry.  If 'parent_id' is 0 then the file is
+located at the top-level of the hierarchy, otherwise it's located
+under the directory with the matching 'file_id'.</p>
+
+<h2>TLV format <a name="tlv-format"></a></h2>
+
+<p>This format is a series of fields :</p>
+
+<ul>
+<li>4 bytes for Type (specified as a 4-byte hexadecimal below)</li>
+<li>4 bytes for value Length (uint32be)</li>
+<li>Value</li>
+</ul>
+
+<p>Value semantics depend on its Type. It may contain an uint32be
+integer, a UTF-16LE string, a character sequence, or an inner TLV
+structure.</p>
+
+<p>Unless otherwise noted, TLV structures appear once.</p>
+
+<p>Some fields are optional and may not be present at all
+(e.g. 'archive_createdwith').</p>
+
+<p>Some fields are unique within a structure (e.g. 'files_iv'), other
+may be repeated within a structure to form a list (e.g. 'fileprops'
+and 'passworduser').</p>
+
+<p>The following top-level types that have been identified, and detailed
+in the next sections:</p>
+
+<ul>
+<li>80110600: fileprops, used for the file list as well as for the
+global archive properties</li>
+<li>001b0600: archive_extraprops</li>
+<li>80140600: accesslist</li>
+</ul>
+
+<p>Some additional unidentified types may be present.</p>
+
+<h3>_ctlfile TLV <a name="_ctlfile-tlv"></a></h3>
+
+<ul>
+<li>80110600: fileprops (TLV structure): global archive properties
+<ul>
+<li>00230400: archive_pathname (UTF-16LE string): initial archive filename (past versions also leaked the full pathname of the initial archive)</li>
+<li>80270200: encryption_mode (utf32be): global encryption mode; 103 for "AES-CBC-STREAM", 104 for "AES-CBC-CTS"</li>
+<li>80260200: encryption_strength (utf32be): AES key size, in bytes (e.g. 32 means AES with a 256-bit key)</li>
+<li>80280500: files_iv (sequence of bytes): global IV for all filenames and file contents</li>
+</ul></li>
+<li>001b0600: archive_extraprops (TLV structure): additionnal archive properties (optional)
+<ul>
+<li>00c40500: archive_creationtime (FILETIME): date and time when archive was initially created (optional)</li>
+<li>00c00400: archive_createdwith (UTF-16LE string): uuid-like structure describing the application that initialized the archive (optional) <br />
+{00000188-1000-3CA8-8868-36F59DEFD14D} is Zed! Free 1.0.188.</li>
+</ul></li>
+<li>80140600: accesslist (TLV structure): describe the users, their key encryption and their permissions
+<ul>
+<li>80610600: passworduser (TLV structure): user identified by password (0 or more)</li>
+<li>80620600: rsauser (TLV structure): user identified by RSA key (via file or PKCS#11 token) (0 or more)</li>
+<li>Fields common to passworduser and rsauser:
+<ul>
+<li>80710400: login (UTF-16LE string): user name</li>
+<li>80720300: login_md5 (sequence of bytes): used by the application to search for a user name</li>
+<li>807e0100: priv1 (uchar): user privileges; present and set to 1 when user is admin (optional)</li>
+<li>00830200: priv2 (uint32be): user privileges; present and set to 2 when user is admin, present and set to 5 when user is a marked as mandatory, e.g. for recovery keys (optional)</li>
+<li>80740500: files_key_ciphertext (sequence of bytes): the archive encryption key, itself encrypted</li>
+<li>00840500: user_creationtime (FILETIME): date and time when the user was added to the archive</li>
+</ul></li>
+<li>passworduser-specific fields:
+<ul>
+<li>80760500: pbe_salt (sequence of bytes): salt for PBE</li>
+<li>80770200: pbe_iter (uint32be): number of iterations for PBE</li>
+<li>80780200: pkcs12_hashfunc (uint32be): hash function used for PBE and PBA key derivation; 21 for SHA-1 and 22 for SHA-256</li>
+<li>80790500: pba_checksum (sequence of bytes): password derived with PBA to check for password validity</li>
+<li>807a0500: pba_salt (sequence of bytes): salt for PBA</li>
+<li>807b0200: pba_iter (uint32be): number of iterations for PBA</li>
+</ul></li>
+<li>rsauser-specific fields:
+<ul>
+<li>807d0500: certificate (sequence of bytes): user X509 certificate in DER format</li>
+</ul></li>
+</ul></li>
+</ul>
+
+<h3>_catalog TLV <a name="_catalog-tlv"></a></h3>
+
+<ul>
+<li>80110600: fileprops (TLV structure): describe the archive files (0 or more)
+<ul>
+<li>80300500: file_id (sequence of bytes): a 16-byte unique identifier</li>
+<li>80310400: filename_halfanon (UTF-16LE string): half-anonymized filename, e.g. File1.txt (leaking filename extension)</li>
+<li>00380500: filename_ciphertext (sequence of bytes): encrypted filename; may have a trailing NUL byte once decrypted</li>
+<li>80330500: file_size (uint64le): decompressed file size in bytes</li>
+<li>80340500: file_creationtime (FILETIME): file creation date and time</li>
+<li>80350500: file_lastwritetime (FILETIME): file last modification date and time</li>
+<li>80360500: file_lastaccesstime (FILETIME): file last access date and time</li>
+<li>00370500: parent_directory_id (sequence of bytes): file_id of the parent directory, 0 is top-level</li>
+<li>80320100: is_dir (uint32be): 1 if entry is directory (optional)</li>
+</ul></li>
+</ul>
+
+<h2>Decrypting the archive AES key</h2>
+
+<h3>rsauser</h3>
+
+<p>The user accessing the archive will be authenticated by comparing
+his/her X509 certificate with the one stored in the 'certificate'
+field using DER format.</p>
+
+<p>The 'files_key_ciphertext' field is then decrypted using the PKCS#1
+v1.5 encryption mechanism, with the private key that matches the user
+certificate.</p>
+
+<h3>passworduser</h3>
+
+<p>An intermediary user key, a user IV and an integrity checksum will be
+derived from the user password, using the deprecated PKCS#12 method as
+described at
+<a href="https://tools.ietf.org/html/rfc7292#appendix-B">rfc7292 appendix B</a>.</p>
+
+<p>Note: this is not PKCS#5 (nor PBKDF1/PBKDF2), this is an incompatible
+method from PKCS#12 that notably does not use HMAC.</p>
+
+<p>The 'pkcs12_hashfunc' field defines the underlying hash function. The
+following values have been identified:</p>
+
+<ul>
+<li>21: SHA-1</li>
+<li>22: SHA-256</li>
+</ul>
+
+<h4>PBA - Password-based authentication</h4>
+
+<p>The user accessing the archive will be authenticated by deriving an
+8-byte sequence from his/her password.</p>
+
+<p>The parameters for the derivation function are:</p>
+
+<ul>
+<li>ID: 3</li>
+<li>'pba_salt': the salt, typically an 8-byte random sequence</li>
+<li>'pba_iter': the iteration count, typically 200000</li>
+</ul>
+
+<p>The derivation is checked against 'pba_checksum'.</p>
+
+<h4>PBE - Password-based encryption</h4>
+
+<p>Once the user is identified, 2 new values are derived from the
+password with different parameters to produce the IV and the key
+decryption key, with the same hash function:</p>
+
+<ul>
+<li>'pbe_salt': the salt, typically an 8-byte random sequence</li>
+<li>'pbe_iter': the iteration count, typically 100000</li>
+</ul>
+
+<p>The parameters specific to user key are:</p>
+
+<ul>
+<li>ID: 1</li>
+<li>size: 32</li>
+</ul>
+
+<p>The user key needs to be truncated to a length of
+'encryption_strength', as specified in bytes in the archive
+properties.</p>
+
+<p>The parameters specific to user IV are:</p>
+
+<ul>
+<li>ID: 2</li>
+<li>size: 16</li>
+</ul>
+
+<p>Once the key decryption key and the IV are derived,
+'files_key_ciphertext' is decrypted using AES CBC, with
+<a href="https://tools.ietf.org/html/rfc5652#section-6.3">PKCS#7</a> padding.</p>
+
+<h2>Identifying file streams</h2>
+
+<p>The name of the MS-CFB stream is derived by shuffling the bytes from
+the 'file_id' field and then encoding the result as hexadecimal.</p>
+
+<p>The reordering is:</p>
+
+<pre><code>Initial  offset: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Shuffled offset: 3 2 1 0 5 4 7 6 8 9 10 11 12 13 14 15
+</code></pre>
+
+<p>The 16th byte is usually a NUL byte, hence the stream identifier is a
+30-character-long string.</p>
+
+<h2>Decrypting files <a name="decrypting-files"></a></h2>
+
+<p>The compressed stream is split in chunks of 512 bytes, each of them
+encrypted separately using AES CBC and the global archive encryption
+scheme. Decryption uses the global AES key (retrieved using the user
+credentials), and the global IV (retrieved from the deobfuscated
+archive metadata).</p>
+
+<p>The IV for each chunk is computed by:</p>
+
+<ul>
+<li>expressing the current chunk number as little endian on 16 bytes</li>
+<li>XORing it with the global IV</li>
+<li>encrypting with the global AES key in ECB mode (without IV).</li>
+</ul>
+
+<p>Each chunk is an independent stream and the decryption process
+involves end-of-stream handling even if this is not the end of the
+actual file. This is particularly important for the CTS handler.</p>
+
+<p>Note: this is not to be confused with CTR block cipher mode of
+operation with operates differently and requires a <em>nonce</em>.</p>
+
+<h2>Decompressing files <a name="decompressing-files"></a></h2>
+
+<p>Compressed streams are zlib stream with default compression options
+and can be decompressed following the
+<a href="https://www.ietf.org/rfc/rfc1950.txt">zlib format</a>.</p>
+
+<h2>Test cases <a name="test-cases"></a></h2>
+
+<p>The following test cases allow the implementor to check whether
+his/her implementation correctly generates the values found in
+existing .zed files.</p>
+
+<p>Unless otherwise noted, sequences of bytes are represented in
+hexadecimal format.</p>
+
+<h3>TLV</h3>
+
+<p>Single TLV entry:</p>
+
+<pre><code>80330500000000081b00000000000000
+</code></pre>
+
+<p>Expected result:</p>
+
+<ul>
+<li>file_size: 27</li>
+</ul>
+
+<p>Nested TLV entry:</p>
+
+<pre><code>80110600000000a08030050000000010c4fe92aaeeb16849a01fb1769b608b00
+0037050000000010000000000000000000000000000000008031040000000012
+460069006c00650031002e0074007800740080330500000000081b0000000000
+00008034050000000008840537fca815d30180350500000000088105e507a915
+d3018036050000000008840537fca815d301003805000000000e73868338f181
+709475a022575692
+</code></pre>
+
+<p>Expected result:</p>
+
+<ul>
+<li>fileprops (160 bytes)
+<ul>
+<li>file_id: c4fe92aaeeb16849a01fb1769b608b00 (hexadecimal)</li>
+<li>parent_directory_id: 0</li>
+<li>filename_halfanon: File1.txt</li>
+<li>file_size: 27</li>
+<li>file_creationtime: 2017-08-15T09:29:25.402970</li>
+<li>file_lastwritetime: 2017-08-15T09:29:44.998233</li>
+<li>file_lastaccesstime: 2017-08-15T09:29:25.402970</li>
+<li>filename_ciphertext: 73868338f181709475a022575692 (hexadecimal)</li>
+</ul></li>
+</ul>
+
+<h3>PBA/PBE</h3>
+
+<p>SHA-1 PBA:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-1
+ID: 3
+IV: d0ee7a995bf3022e
+Iterations: 200000
+Size: 8
+Expected result: 98a431f7e9eda53f
+</code></pre>
+
+<p>SHA-1 PBE user IV:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-1
+ID: 2
+IV: a9e8a85292a5a67d
+Iterations: 100000
+Size: 16
+Expected result: 1e5101ebda3e528994456e29ec2d0682
+</code></pre>
+
+<p>SHA-1 PBE user key:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-1
+ID: 1
+IV: a9e8a85292a5a67d
+Iterations: 100000
+Size: 32
+Expected result: abf33b17d000bef9b0211159858bd8ad6665651c439a36cb23d12f697fb038e6
+</code></pre>
+
+<p>SHA-256 PBA:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-256
+ID: 3
+IV: 4257726a5e963702
+Iterations: 200000
+Size: 8
+Expected result: e7e369a7819ce1a7
+
+Password: 1234567890azertyuiopqsdfghjklmwxcvbn
+Hash: SHA-256
+ID: 3
+IV: 950aeef1009a494f
+Iterations: 200000
+Size: 8
+Expected result: a3a3a997b89b212a
+</code></pre>
+
+<p>SHA-256 PBE user IV:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-256
+ID: 2
+IV: 3d594d2e8c35d0a7
+Iterations: 100000
+Size: 16
+Expected result: 2d8958c9f356abb359515907105bedbe
+</code></pre>
+
+<p>SHA-256 PBE user key:</p>
+
+<pre><code>Password: 123456
+Hash: SHA-256
+ID: 1
+IV: 3d594d2e8c35d0a7
+Iterations: 100000
+Size: 32
+Expected result: 64cc5dc03d9ea5c4df51bb256dbac7a6a94cd0631df421dc1c4dd1a396bc3317
+</code></pre>
+
+<h3>Filename encryption (single stream)</h3>
+
+<p>0.x block</p>
+
+<pre><code>Archive encryption: AES-CBC-* 128bit (STREAM)
+Key: 4a85bda3df4df0ea3090cc21618901ee
+IV: f266ef5a855d0494b6c9a9a8325a4415
+Ciphertext: 6905386c749b7fc088ca40b0419a
+Expected result: abc.txt
+</code></pre>
+
+<p>1 block</p>
+
+<pre><code>Archive encryption: AES-CBC-* 256bit (STREAM)
+Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext: d1a6043db29fc231e732b0be54b4dba2
+Expected result: 1309.txt
+</code></pre>
+
+<p>1.x block</p>
+
+<pre><code>Archive encryption: AES-CBC-CTS 128bit
+Key: dc30c294eb879cc505961f042ca790d4
+IV: 696eb7b48347ade4b3d7a0812bc695ea
+Ciphertext: 3842bf4e19ccce83deaf9cdf763cdd713d7b
+Expected result: empty.txt
+</code></pre>
+
+<p>31.x blocks (OS-level max filename length)</p>
+
+<pre><code>Archive encryption: AES-CBC-CTS 128bit
+Key: a63b92d06e0da2e9c83e2aaef3983607
+IV: 5a6bfebcd36eb7d5fabb181ffd0b4be2
+Ciphertext:
+    53faea11bb13ed3cdcc3f3a6bd2df19618aa4ac676db04301361e1458e30b5ca
+    9f6cdfe7e71b344f3e4587d4d6017aad28513a1b7fbcc6e1d2711e6351d071b2
+    5464626da8135ea0111c53c4d506742c2e68c1805b2a9e75856d8b1f806fc95b
+    ebfbc922e504ae08ad4a6b976fb2654c149646daf9140e730ebf85cb7e32903b
+    a9fd35ddd7de700c6fd8bbe40809752d756318d7f29c03b70e29a40000cd866c
+    2353e0197f863b8359905199ba65107fcb92ae05f6a7e31cca4fdb1932331bf9
+    a0bde421a2ccc63794214e8116570dd770bbd2212c59291f1cb1eb45cf8b4028
+    76779203459c5599b95973b8b908f013462b1e7dbe46f11f28f03272bee69360
+    87257e4df57a79e6d761eb689e158dbea32d6eb61ee05ea715f93556350ebfbf
+    d05201cd1a16038bbc20ba465a3cc6fda438613de715e2d479c4693f44224491
+    03a3d6475f3ce2bf131831d07bed6e5709e2b91f4ea8f806b47fad50daae3dd0
+    440743b7f75abce9bc106f0c74a2c91141a86cd5d8377c0472751a5cdad2f686
+    fdc119a70cfc731990c9caa46c754a8fabfd9726bc8fb7345caf050c7ce65c0b
+    9d128af4c65d98bf15d7d6ab4ecacc12fc8385556514861fad89e410e535c961
+    06eb8bf244a1e39d3e472df624e435e63e5cafaca040b45a42fd02d4fda7ae68
+    8a04fc828e429481ba8130f118d04a7726a4ebe2291f97cf65f7ad1b40b2
+Expected result:
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt
+</code></pre>
+
+<h3>file_id to stream name</h3>
+
+<pre><code>file_id:     F714C09327642647991FF50D4552FB00 (hexadecimal)
+stream name: 93C014F764274726991FF50D4552FB (ascii)
+</code></pre>
+
+<h3>IV derivation for file chunks</h3>
+
+<pre><code>Key: dc30c294eb879cc505961f042ca790d4
+IV: 696eb7b48347ade4b3d7a0812bc695ea
+Chunk: 3rd (index 2)
+Expected result: 5b47eacddf0fc1361b19482981e9e9d3
+</code></pre>
+
+<h3>File encryption (chunked stream)</h3>
+
+<h4>AES-CBC-STREAM 256-bit</h4>
+
+<p>0.x block</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext: b32779d775ba57a0
+Expected result: empty string, compresssed with a default zlib stream
+</code></pre>
+
+<p>1 block</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext: 8542a003819a682db7ae987c5fbbd324
+Expected result: '12345678' (ascii), compressed as a default zlib stream
+</code></pre>
+
+<p>2 blocks</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext: d34bd93cf95b971f9a99a51e8cc3e08b64cce0f5e7987e7fb7d583c69d8c09be
+Expected result: '1234567890' (ascii) 160 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x blocks</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    31dd46d7e4f397bef80a668d8e51e6d9633e5d14272dc381f0ef1b55bb957fc8
+    fc96
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii), compressed as a default zlib stream
+</code></pre>
+
+<p>0.x chunk</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    326efb4a2b4f447411541351b40430d85ffd72070c78a2f903de669cc0ad3fd6
+    ab8517cd4dc0724fcb092b56c30412bbbe2c36636793f7fe5c65e4d9183e0c6e
+    2d2771eb286152e4943b73a33ca109023845430fae487a037768f27db6b53b70
+    e842ff32e02e99ecdc9638a9fc2ee9f188672354f7d4dd57f55c5c9ebdc2a74a
+    4f3e6d7ff8404e84488fcd03375077f826817f4e7fff5a5ccc8bb80f7555f1a6
+    2068a5b74d013b6fe24b9c3f07d58c857f7033c3b14fc24b5561089640f4f319
+    11db459ee758cb937b70b1e76febfc93c4dabb18371cc3d7f2f85985b4c39939
+    3fe9910ad197210ae50a2a149c37f690030a773f68e6964bcaad11d5acd7afc1
+    aa241747029bc4350c9b0f7815a3a3b337138e3d4273c4c49e82a9a2d9b0a22e
+    4fdf8663c0259c57a0abc4b6060b64395b9c81ef60577f71ed1ab3d51aff5ac2
+    b5ada58bcef7358f583134a1b3b2a4bbd67a81f941ee7d5b759101dfe1e9eb22
+    b5b7b59043652965ab2786f5484f27e4f1ad67db7d0624ff027dcff67fc08140
+    453b78f329a67c0056b8cce38962438cf0d17d094b3fe7df175ef2e6b56c4ca2
+    38049ed8702dec5344d6282841f8ea10ed5e91b9f3117728116bb738ddd91149
+    ea811ea6bd6e09bc9dd1ceb0b0f1970536d9e7d4f6eb97aca997ddf2d264480d
+    a9514d82bea2e48540cc1b65c46fde8b45100fece850011debacf91767
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7300 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    326efb4a2b4f447411541351b40430d85ffd72070c78a2f903de669cc0ad3fd6
+    ab8517cd4dc0724fcb092b56c30412bbbe2c36636793f7fe5c65e4d9183e0c6e
+    2d2771eb286152e4943b73a33ca109023845430fae487a037768f27db6b53b70
+    e842ff32e02e99ecdc9638a9fc2ee9f188672354f7d4dd57f55c5c9ebdc2a74a
+    4f3e6d7ff8404e84488fcd03375077f826817f4e7fff5a5ccc8bb80f7555f1a6
+    2068a5b74d013b6fe24b9c3f07d58c857f7033c3b14fc24b5561089640f4f319
+    11db459ee758cb937b70b1e76febfc93c4dabb18371cc3d7f2f85985b4c39939
+    3fe9910ad197210ae50a2a149c37f690030a773f68e6964bcaad11d5acd7afc1
+    aa241747029bc4350c9b0f7815a3a3b337138e3d4273c4c49e82a9a2d9b0a22e
+    4fdf8663c0259c57a0abc4b6060b64395b9c81ef60577f71ed1ab3d51aff5ac2
+    b5ada58bcef7358f583134a1b3b2a4bbd67a81f941ee7d5b759101dfe1e9eb22
+    b5b7b59043652965ab2786f5484f27e4f1ad67db7d0624ff027dcff67fc08140
+    453b78f329a67c0056b8cce38962438cf0d17d094b3fe7df175ef2e6b56c4ca2
+    38049ed8702dec5344d6282841f8ea10ed5e91b9f3117728116bb738ddd91149
+    ea811ea6bd6e09bc9dd1ceb0b0f1970536d9e7d4f6eb97aca997ddf2d264480d
+    a9514d82bea2e48540cc1b65c46fde8bcb6df8b75e97fd44310850d8a2f186d6
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7350 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 0.x block</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    c9b0af18203e45ddf1d635470db6eadd8eb70887a88ad56fe23a147ec835e3af
+    ebc25f8e2909253130750a5a4fd1d4dda5a6dae71016141c661c0b019d45e209
+    3a986c49201334cef979f0428c1490fff46f71b431902eca14b25992977f44bb
+    3435cfeb2c4cf086bf9df273dc478ee214031297cb5e56011b5a5bb8b0ba2ead
+    b9ec01446345130ac1b5d29bc827bf1ea4b59e3f95048f5ba9074664537f7c97
+    8d485e641e035d628c800e8e5522e3ae4c5feff5b7c8c2f86d33f05ed90091ef
+    a71414cdf4ae4e2f6972702c4cea9040ea9317e55ba8bc65042d96ef925d1ab5
+    5d51161b3e910a09fc84986a458caa3e9e9a03aec3b026f8e89bc60d6a4207d6
+    ee1123b59e017895d264bae693b9e8bf369482719feb1c2e44b911e27e716b84
+    3dae7ace130c5f1853b75943f0efd4399fb9187492efebec6b93e0bc85e2bdac
+    2c5d222efb61800e68c2132a11d938aa669aade0f8b2c7849d388bfe614f4719
+    8034de3bcb875aac9f4befbc214a03620473b489d204eaab4d2439e5e091ed96
+    c9a923849dd07ad9e5b43d1245459242a59138ca6b77b57f671aea2e9b0affd9
+    47234f717236cfad90774bde66b6733e494aa6cd0694fc4a923fe989eca61126
+    7edbe0c7777fe6c72c6e0d01dcd5a24c16b567072807f6b5d08b11f23aa160d5
+    198c9658e6386d527c09d250f7b8a074e16d2b7e66f8df4b10fa06daa897447b
+    626004a879daf70f01e6
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7500 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1 block</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    c9b0af18203e45ddf1d635470db6eaddefbdfb48b3d860a9a57a8fa8f81e02ff
+    2377daa720163708e574b312e0ca1a396652611043cf3680e8ca376aec83306f
+    0cb3e32eeaa98069fedf4ca8b5ffbc5415ba6c17b844dc2893732c3f5b79006f
+    ecd9ea66016c384e9df9df9b94e4d016fee272c36d2c0398f664cb55592a9fb5
+    051658f9fc046e3f3eb4923d6da0903f07794bc57eef32076649f33195d2e065
+    ea9d691541615a2bad99df6b12fdfae97ed23dd81dab59564e72577f66c3a4c1
+    c8d45ef0a599ddb2749418e195156d5e93763ead1c13c00fc8591aa754586e26
+    d670b680081dc911e127690734dafb99cd7458bebd73b31b5bfa7f05ed803fcb
+    e2fb802fe5db218a18436877ccb25739b38c682e453612d3c9feda42e7df6b54
+    62c5939ba821163eb282fd61ba4e230464140c3130233a576f1a856693a9dee8
+    3b9bd29da33c592250d4b564146f8e5033ce4bffbcb94257061285a43cc1623c
+    cdd19753465b7be7e33b926271186eb10e0d4230db26c1be33fa920cecb7ec72
+    71e19290d5012eb9c01c6b8986f98172ceb3e30bea7f1b019a074137fbe9abce
+    f14040d53bf51d81b4f958145b2ebeaec54da62c630c7451f3155b83ef480a0e
+    b9e53f12476aa57b2ab129536560ca383c2646e747646726712d995bacfa1300
+    2971de91e04101566520f24336488515b65afe8cbfa8a1ba91c50d382c9f8c35
+    238f862d46c6a0f7bf71b7012af6b880
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7600 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1.x block</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    c9b0af18203e45ddf1d635470db6eaddefbdfb48b3d860a9a57a8fa8f81e02ff
+    2377daa720163708e574b312e0ca1a396652611043cf3680e8ca376aec83306f
+    0cb3e32eeaa98069fedf4ca8b5ffbc5415ba6c17b844dc2893732c3f5b79006f
+    ecd9ea66016c384e9df9df9b94e4d016fee272c36d2c0398f664cb55592a9fb5
+    051658f9fc046e3f3eb4923d6da0903f07794bc57eef32076649f33195d2e065
+    ea9d691541615a2bad99df6b12fdfae97ed23dd81dab59564e72577f66c3a4c1
+    c8d45ef0a599ddb2749418e195156d5e93763ead1c13c00fc8591aa754586e26
+    d670b680081dc911e127690734dafb99cd7458bebd73b31b5bfa7f05ed803fcb
+    e2fb802fe5db218a18436877ccb25739b38c682e453612d3c9feda42e7df6b54
+    62c5939ba821163eb282fd61ba4e230464140c3130233a576f1a856693a9dee8
+    3b9bd29da33c592250d4b564146f8e5033ce4bffbcb94257061285a43cc1623c
+    cdd19753465b7be7e33b926271186eb10e0d4230db26c1be33fa920cecb7ec72
+    71e19290d5012eb9c01c6b8986f98172ceb3e30bea7f1b019a074137fbe9abce
+    f14040d53bf51d81b4f958145b2ebeaec54da62c630c7451f3155b83ef480a0e
+    b9e53f12476aa57b2ab129536560ca383c2646e747646726712d995bacfa1300
+    2971de91e04101566520f24336488515b65afe8cbfa8a1ba91c50d382c9f8c35
+    2e06f1b3f637cc174668852f354e9ee56d4409f937b5
+ Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7700 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x chunks</p>
+
+<pre><code>Key: ce83292f314528c057a85e15c8f1acf06cf188ba9c73c207e4c86f1abd26242a
+IV: 6bcd5042d9a0298a4086e9a2e9363271
+Ciphertext:
+    326efb4a2b4f447411541351b40430d833103f519a002767b5d0a8b982145d4e
+    103ebbec1553c0754f9575ed4bbec1aaf99025d2aa5f98bfe013b6f360130739
+    95f65b8b0aee41d41785f5fa7e5d8ff5034fe00fd82efd3cf9c01467a3bf1052
+    b981beeaf7be50f546dfa0b1a8c21f8d212a3ff32310e53ba33bb1fd6455587d
+    003f2ed04bb758063945afde04fe29558b7c94e3e07b6a1f21386cb7ff81c98e
+    31024147607fa495189ad3244b5605f3deacc39886a8731fe635f418436cbb04
+    e04403ed4c3c0499a0d6260af9c9a4bb313de1add87d1a3baa731d81cb150c3a
+    e1d6882d96626ab6b7b73e1889974baef7ec0cd8ff32f546c2efd37ba20ba16a
+    16456e9f6f52fa5fddb27b966aa4a36a4d3dc5434b1061394f04454ed146b75d
+    2f85e937e5686adc7608bfa8f219f043f791b2afadb30b9880b376aedfedd054
+    350cf5a5b0681f0280fff66618bed449f1f26a5e03a108d174d717a652bfae89
+    3ac91b95499112dc9af9e80b3938740a827d5a6324be3e62bdbec97a47041335
+    2a13598bfb6c61e40a632e49a4edf87b640ed2e911f0cc79954a932e2cc99b11
+    2fa7bc7d4affd42422c8075170b9522ef77201e4b29a005f4ff4a2db3ca66570
+    36528d7fe60e4cbc03a7467a8a26380d2444a0cc7e0a214caf48d593920942a6
+    5ffbf7ae57d46aeba0dde30060c7d966e9b2a87bc0fda113c6d996782613aec4
+    6e0b3d2ab76ba727860bbd53e0b65a8eee4763a610c4774c74be6f41cd50ac3b
+    6a6348b21b4a9b4e23783d7ffd356f3fdaf510219f18caabeef8145744bfc7b9
+    29015c59097d564669a8e115358a23732cb52e0466375ab2d7bcb59f62f0fa05
+    88941e4a8d38c19c2d54296fde09d31a553a97b5debe3efa68297f07ebc4178b
+    2e0c2e5fbcd8c95e8c56f5cc019e96c4470107221dfb52e5b5903f8513858664
+    c59c8a45703a9d270539f1e29584efcb3dfb5ca92d4f64be644bcf8daa5e4dd5
+    73ebfb41fd3b5b92d463aea529fa22ab6f76ba0f5df4806b6e13c8fd0eb9e7a7
+    734ed052d2dcc96bae70964b7101d61448ea7343009eed8589ca7b86e9362d73
+    b174cc9856275716f1f4cd04c55a06188bd5478ca0a8bb05cdbeec96ab417a06
+    052d557d2643a2a389b5247be22bd410a941f94637e507cd5b95876da53190cf
+    e551b295701befa9de98004581540450a6a9482ff373828ba9825c025e921768
+    a55a58666172d5953c2b0518dc77c34097f201fe6fbbe92c41db7fe0168ace49
+    791c2995d19ba9d52b1d0f9015d8ab914524b3b4dbbc90d07e97a8421a990f5b
+    5ed0cde04c12bd6b743b425366950f0ed121920be2c43457b7b05018cd87d287
+    95a1cce3aa3c9e4711c364a3a16fe02ba8101cf49b56d9e011b83706c0fb5f17
+    d0da5f357f857cc19da3df802725b5fd9e23f2e69a237313bb527baac942c1d2
+    5e7e80bd9d018c06d828627ee9840edd6538e40c5e2064bfa52965969e04ba0b
+    353ec93f0bfa070e0f4d2676cc0957985b23a83b6b3534a2b60ab303b7ece4b1
+    622f252f0ff98a9fbe9b31fff3c2bd2409132223d5ca7451eb768fbfa5018c11
+    9f4a5d1aa9c5efe3bb9e7d212377e1e0d54f70d972639e579729b16027885079
+    7baff87756d899393341e6e7f4c35d6f6b705274899383decd9b5e51cdc2035c
+    984295e27bdeabd8931bb776e200a110f32dbc5199a4695baaa6bf611996df93
+    6682f401141913ffa965e4cc5e8f4cd170d2b5acda10bcd25c4043eebaea3dbe
+    d2e73795f9645e25c2223c9486527f7acc0cd57b84ebae28d64ace3d0f932fe0
+    e8d7f39396fcb68b2b065ee1891ca716b00f5ed758af460f37e7f980bd
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 20000 times, compressed as a default zlib stream
+</code></pre>
+
+<h4>AES-CBC-CTS 128-bit</h4>
+
+<p>0.x block</p>
+
+<pre><code>Key: 5d4f449215041cf0983b7ae292dbb27c
+IV: f40cb3107de8fac3e496011302d2ea1f
+Ciphertext: 376f7e795cfe6dc8
+Expected result: empty string, compresssed with a default zlib stream
+</code></pre>
+
+<p>1 block</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext: e7ce27763cbf160c2cb7a6f74fd0cd77
+Expected result: '12345678' (ascii), compressed as a default zlib stream
+</code></pre>
+
+<p>2 blocks</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext: 475dc947882fa5fffc4bb5f05cb0871666981837ea73bc1cfec1b69f6bd8a69e
+Expected result: '1234567890' (ascii) 160 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x blocks</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    36b92614a04432fadd7df97d16cb51b17c4e5702fab7815de055951d3813ba8c
+    7241
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 160 times, compressed as a default zlib stream
+</code></pre>
+
+<p>0.x chunk</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    a3b678cdbd8b10c968e29f41fb8f0487c6beedc00467eb47f6cc64dec95bf971
+    df873a691ffd3efd6745ffaf0488dac06af7f5f0698c1cad1627c4c2080df95d
+    8190948c9d4a0c51899f16c3e9434a20d13ec939a50fb5e888af6678771853e1
+    7ef820efa121f3fc12b93aabadb6ea1540d205a63ec4ca5bfbacc6a7730bf454
+    44058f39f825c12d331c770a8b61562c86360900263c91c399ded0713769c656
+    7c89b2b64f174b8d61486f6f72b374e42a222805b39eedc0661e8e6fa0a43c01
+    1cc6ec0f234b2f4e088e5919721467d8680807de3005309d32ff5dd64722597f
+    197a18daa823f99e2783337b41b1dd5f0af3d71fd13f46d01a88de167157fad9
+    91bad8a273f09155a213b34be8e3f7178223733e6a568e24394dc992f77757c9
+    115c19358e302f3a32071dd82614c3ce4dea700e5c05392dd8fc49cc7708fc1a
+    217d60a5124103455b8ab1b001f65730ebd3969f9d093862a19b9536bf77562e
+    832a5851035ef7a17f23da4f2a5338ae8bb2224e33e6cc72edda8b5fc58f1eb0
+    249d3d3c8e20eb2b80b2d94cfe7ec3cf7d070d3607b63d7bfe75511de79c9375
+    56642a313d33426bad6e8fd15bf8511f0bd43791847ef007bd4a8584cde42152
+    80d389deba8d6ba41635ea99b1a7305b5c7824f64d787e8b84e769309f6080ae
+    84ebb5e8e5b469fae907bed10275a4a57f80f135dc6fabac30adff6b20
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7300 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    a3b678cdbd8b10c968e29f41fb8f0487c6beedc00467eb47f6cc64dec95bf971
+    df873a691ffd3efd6745ffaf0488dac06af7f5f0698c1cad1627c4c2080df95d
+    8190948c9d4a0c51899f16c3e9434a20d13ec939a50fb5e888af6678771853e1
+    7ef820efa121f3fc12b93aabadb6ea1540d205a63ec4ca5bfbacc6a7730bf454
+    44058f39f825c12d331c770a8b61562c86360900263c91c399ded0713769c656
+    7c89b2b64f174b8d61486f6f72b374e42a222805b39eedc0661e8e6fa0a43c01
+    1cc6ec0f234b2f4e088e5919721467d8680807de3005309d32ff5dd64722597f
+    197a18daa823f99e2783337b41b1dd5f0af3d71fd13f46d01a88de167157fad9
+    91bad8a273f09155a213b34be8e3f7178223733e6a568e24394dc992f77757c9
+    115c19358e302f3a32071dd82614c3ce4dea700e5c05392dd8fc49cc7708fc1a
+    217d60a5124103455b8ab1b001f65730ebd3969f9d093862a19b9536bf77562e
+    832a5851035ef7a17f23da4f2a5338ae8bb2224e33e6cc72edda8b5fc58f1eb0
+    249d3d3c8e20eb2b80b2d94cfe7ec3cf7d070d3607b63d7bfe75511de79c9375
+    56642a313d33426bad6e8fd15bf8511f0bd43791847ef007bd4a8584cde42152
+    80d389deba8d6ba41635ea99b1a7305b5c7824f64d787e8b84e769309f6080ae
+    a83132b940fb519a4180ca7cee903d957f80f135dc6fabac30adff6b20f6631d
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7350 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 0.x block</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    e9ee8a3c1cbfcbef30078d860eafadf7f2aa2a6ab30bf32a23fce22bbb900f48
+    3d8d3ec090915a3182e44afbcb37f7ccb7223cd7227e88384cc3617743f76d9d
+    0d1695d2d9d683e3fd13cfd545f57f1eecae241da03548b9c2f438d23c3105c2
+    be04483c4c4ef4527ab8f5c95634bf83cb24bc1f7541cb5f558312df027ce450
+    c261c92433c37022a2705798f02adc007b057ba33a1db1ec2dc637b0d816b3ee
+    7c961851861d5a9f7efbe8872ee43c1cb944402b93f968cab65ed12af46c63b8
+    04c6c09e53c5411a404340a3ba5a9b94b4f009063b776967d5d87d6f8b778f1b
+    0bc0512a5179a373b0a72c693877440365e0f3492252050822b26f29dcd8053e
+    0cc1eea69291bf78481edde3c6f16e963dc8768f93611ee14bd8bb916969d17e
+    56c10bebd0a2953ce271bff3afacca4c5691d9647af1c233763ebc75904b5d1d
+    57785e092457efaba1923051ae5a976f04bed7da5e942f0c411d0cc8a268c566
+    7f663f406d58651e763a7eae517d8207219f3f588389e27f2cb6922a3f7a6b95
+    1ff3243c08dcc57831103611eb8bf18dceb3b762028d552889a1db576a746e80
+    80ca12fd011ce71a36dcac0ccf7ea66a0b187519bd16aba390e73c331472ae97
+    d66b0f5f931ea4341d0f9441de13844f647753d076f03bcf5f28bca399274ee9
+    7b84d37ca32b2f790c2564dfb4fe8ba79ba18a1a7599c06d0ad260561a3c0dd8
+    1ea7a9e614387305cb7a
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7500 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1 block</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    e9ee8a3c1cbfcbef30078d860eafadf73917f062373c91891c13c9c73efeedbc
+    c76a92622d5a432e4d1d011c90117e50c5454d998aef7e563bfd312ff8c33282
+    337eccbb4dd90a1dc11491441df92252d21cbadce536d447d251416cbfe86614
+    db9f5505b0918985b5120740430421c0ab473411a4fe3b74398abe655912c041
+    06ac27f06243c91c0296e2bc0a4a8d80bd7c5de257e479b91ee608d7951dc110
+    ccf0a7de800ba7b314906be97ce2ab31f41131d8bb836e817ac245b6ea0903ce
+    fc1e216d3f4d295a81cd3d8d8c6378e9c43fc44823bae5c7a120daebe89ccaa9
+    b7723eb4ce6dd9282824972c2343a7bcf99e9a3807001bc2e9ec8355826aedac
+    147beaf4f3a0ad854fb6b621ed954f8fdaee6aade39f56f29a418b2a12f46d39
+    b4468d862766d312241b39eeea46d5825fab3bef71c81ad34fb8de6ac8e9a832
+    a73b728c43469f950f9675d60ec51462d7c6018567d36fba60fbec2c0fffe19c
+    c27acbfad60b77a72071ff3e09a5a0397d82b6a429e624031930dc838b516043
+    d0b5a0ba211701991ce9b0b1a5eb7c0eb6d208a0284d581be5f9d1b45b956d07
+    9dd8ed2139d55c0d1aa38832e9eefafb22a3e220cf919fb8c00a7f9c0fe5a56a
+    275877b5c781a8bbee6dfcaeb980413da26f2fae241ae93d0c6914fe3c25875d
+    8e186cb96dc2a06c42dfcf7345151c5922b80d15c5727a03180acd425326aac4
+    c6266d3c969b3e9d2f2539b83eaa0704
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7600 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1.x block</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    e9ee8a3c1cbfcbef30078d860eafadf73917f062373c91891c13c9c73efeedbc
+    c76a92622d5a432e4d1d011c90117e50c5454d998aef7e563bfd312ff8c33282
+    337eccbb4dd90a1dc11491441df92252d21cbadce536d447d251416cbfe86614
+    db9f5505b0918985b5120740430421c0ab473411a4fe3b74398abe655912c041
+    06ac27f06243c91c0296e2bc0a4a8d80bd7c5de257e479b91ee608d7951dc110
+    ccf0a7de800ba7b314906be97ce2ab31f41131d8bb836e817ac245b6ea0903ce
+    fc1e216d3f4d295a81cd3d8d8c6378e9c43fc44823bae5c7a120daebe89ccaa9
+    b7723eb4ce6dd9282824972c2343a7bcf99e9a3807001bc2e9ec8355826aedac
+    147beaf4f3a0ad854fb6b621ed954f8fdaee6aade39f56f29a418b2a12f46d39
+    b4468d862766d312241b39eeea46d5825fab3bef71c81ad34fb8de6ac8e9a832
+    a73b728c43469f950f9675d60ec51462d7c6018567d36fba60fbec2c0fffe19c
+    c27acbfad60b77a72071ff3e09a5a0397d82b6a429e624031930dc838b516043
+    d0b5a0ba211701991ce9b0b1a5eb7c0eb6d208a0284d581be5f9d1b45b956d07
+    9dd8ed2139d55c0d1aa38832e9eefafb22a3e220cf919fb8c00a7f9c0fe5a56a
+    275877b5c781a8bbee6dfcaeb980413da26f2fae241ae93d0c6914fe3c25875d
+    8e186cb96dc2a06c42dfcf7345151c5922b80d15c5727a03180acd425326aac4
+    37ca2164da5c704887cb5e612607c8429cfd60d344ed
+ Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7700 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x chunks</p>
+
+<pre><code>Key: 30950ef72cb2423767c48b5ec254dd2a
+IV: b7d615667f0e930f212ef60c12ae1a76
+Ciphertext:
+    a3b678cdbd8b10c968e29f41fb8f048762b5d7336d7eb8a0fc28e3fbe83dca13
+    8df217599c13be57562fafcb0f1367eb49badc3e4f19fc08e2300a1f786295ef
+    51712d430c9397eee86c7ef025e9ffa74cd4a8c048096a1e5b1f3d37b99616c7
+    aede99d750b9cade69b4f14bfd8400e0023fe37fbcd24f8abc5b7ba730966054
+    b16ed5ba70712d7c71ced55607b0c69c554647c0789cc48e0c0074c05c44ee2b
+    2b069d8c442fb5699e93260f73c97217b5c428cf10c48d667511540c1f5e046d
+    40481a574a1cd4b9eb412338da0cfdba990244c37aca69bec3f2ce3d194cadd4
+    25aef3753e603a9d9490e16a50354f2af8313ae535117ee2b9df7e2276ff70c4
+    52add5a1ffa7cf260ba66be0d190992258a27e4ee4327ffc6505d503794692d2
+    3306117cf7b797591b8a30bac11b346cd6e7c4bedb05f88bf095aab94511063e
+    1fd919f4778f4a04e9433bd6e25b1df2f0abb78f21712d1b8e487e2c312731f6
+    1575a3c000ff82b264ced62a274959cf1855c65297f3f816fa6d1bba8994caaf
+    ac5e2b19bf9eec7ace2e7ec12feaa4dcb3e67d33a297939cf3a959d9e594254e
+    86e9f26f17165353ba9282f8ada01f70781ca15ff879c25164e9bf3ffca94585
+    33ac1e4ec0f9901f9f8d484a6de5bc12b35f5d9f381dd7e39644712571dd7ab7
+    625a7f4514d4c82624d1ebe9507ad2c1beaa16e161d5f3e529285daec420cb0a
+    a4851c74fbd1cf42656a6686e732e01d8d72e380c1a024c19ef05116ce8f0250
+    e06e90c9f1156fca9bf804639d95b2626996106840fbbd0e908d480c7125a60f
+    e9b44972786366fe3e891a43ce5b1b48fc127428d465463242e0531343a2ac42
+    250d81f0a65133ac9c840f8aef343b67ef55d5b1c85dc5b743270d445b04dd58
+    0619e73861fe53f950f92f0b0171f3554c1d9abcfef9b8e4c6eded21974eff26
+    a2c607f90d221445611a52463cdd4e42d3af203abe4bd960c854eeb02818dee2
+    22e0a46ad8bab3972d0f6b8cbbffd64934ffa2402d9abea28342aeedd626bae0
+    73799c0600f02a8fc6bb4518ec3e5c1c00b8b26498007612730824acdcafafcc
+    e65f4e2497b7f354c526deb7fa72efd72e9f3f3a492dbafbb85f32d2a5a13f61
+    c0aa86ce31896ae458d2539b1d3ac231f5455713b3ec42972875def6fbda4ccc
+    150486b2dae2e660634e1ad18c4f2ab90651926ee52cba555b886ae2aac2886e
+    23f25c29bd61bb0d64d13397304aff9a4ff107d0dbc5ea8d702b38a4d1646a52
+    c4ed61a165f270392310f17982afef4fbf6b9e0379a0633aac1010a1c9ccdb5d
+    9438db7af7d6a881308f1b4276f2b7168e302c2e3a79966f30b5cbddb166c0ea
+    8e14da9b38aa22a76cc22f25f8c4fc2c626774bfc6b72424e326d4eb3e066508
+    f001ec264882a20ae992b93021095139ad5ec29c003a00a3df0aeee7a0253db6
+    52a74b1591bf051d4e7586f63e564ef0d83a1a3cf8e50f62762b5b82e64a25fd
+    18f693ba69554d598229f40091659688b5b7cde9028b9b149313b3d5273fb1f2
+    a43addb684d6ad3ecf107e0eafed7718098db228cc127419d3c5ccc02b774c95
+    313772fd564d8e364b260dab690b6759646b9873b8b5d641698a76c1fdb50bc3
+    ebb88a92f23fffb720313c90d4e789ecb3205cd9d6f491d105cb972717efd847
+    4b3b6fc7e37630059b8ee24febd39402e91d77850e99152c40ec7291bf2b8ddb
+    422708bef0f5957cc0be43ff7e501e3018495c1270cef6742118bb6236fccfb1
+    eeb13c3e9196310244af7d32bfdff21ff7fa60b10a635c8d55d5ac9f4e880f04
+    2d2707827066a036401ef320f5de17e9f1807a79bad87f3fe197c9e131
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 20000 times, compressed as a default zlib stream
+</code></pre>
+
+<h4>AES-CBC-CTS 256-bit</h4>
+
+<p>0.x block</p>
+
+<pre><code>Key: 855ecc286bb4f1adab26bd39514d4f4eb60181849c3bc605fb3fb78846e0cfef
+IV: bf205053393a02f3927c8f0836660a9f
+Ciphertext: 1188b743550e0994
+Expected result: empty string, compresssed with a default zlib stream
+</code></pre>
+
+<p>1 block</p>
+
+<pre><code>Key: 855ecc286bb4f1adab26bd39514d4f4eb60181849c3bc605fb3fb78846e0cfef
+IV: bf205053393a02f3927c8f0836660a9f
+Ciphertext: b34950d68c87135af46b7c7d6140f73f
+Expected result: '12345678' (ascii), compressed as a default zlib stream
+</code></pre>
+
+<p>2 blocks</p>
+
+<pre><code>Key: 855ecc286bb4f1adab26bd39514d4f4eb60181849c3bc605fb3fb78846e0cfef
+IV: bf205053393a02f3927c8f0836660a9f
+Ciphertext: 5baf62282f9e23d0974aad6eb4f3970da9ac7e5c54356d1c0f5918e378595ba3
+Expected result: '1234567890' (ascii) 160 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x blocks</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    573f710ffab59a2bdb5c928c90195845e8397b391dbb9d7387a5cf9c1ab1a1f0
+    d45c
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 160 times, compressed as a default zlib stream
+</code></pre>
+
+<p>0.x chunk</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    85117ae6a7d43cb7a0f494caeeb61756530ef27255b5630c15100804e52abd41
+    5d8f3ba6940d87869cf6ce5e9d8eee5089a4a48e9bc27406c73b26a05e301578
+    53fd093df1e772fd827eb42c71fcb6975e02b2984fac4cf2135a89b166c2c36d
+    b54220d3281c16a204c26d78fb129560f69fe3e7f90807c45c5b6fddbab9bdf5
+    7e2952fce6e033529ec0ec60675fa5b39db408b67255f4c0fdebc9fb663c8456
+    bf9804c82d41080b14d21f8c3ffa80237bce66dde1213ce860192eb01f8ca157
+    231dd71f9f6662fbab3472ed1d1705c62f7fcf59cc60f00ba7e4ccc71b1e7669
+    2eddc6e0d64f850a7210a51d051593f012ce1e6fbb65904e448ceeabcab0fcfb
+    b89359c3a5709d897436a3a689672e230c7923f84c10815912d0171246eb2b95
+    16c49c092267e35df988fc575afbfded0c0f8f6a4f311fa1e2aa123f2c6efcfa
+    e5a061c34c913316127a71f6fc08c64161b93aa7d969096e69eca91ad71d32a1
+    2a9d171f9c23d9cfe4072ffd3788dc4b7036bd3222eda6c09d5fc62014995376
+    e89c9ef66088752b6cac409f0c89bed4584dc82103a9c36b78851b0dea630213
+    d3c92c3076520cd53fcabb899d5992b62caa63b960be21613befdc745187b861
+    401e148c5fdf94072d3fb587782fcbfd0b7ee48d6d2edd45d25f51d9427e97ef
+    e8b0625fbf3551e68ebdf8fe3cc2798e3d4af2d506c075150ee21a5bc3
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7300 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    85117ae6a7d43cb7a0f494caeeb61756530ef27255b5630c15100804e52abd41
+    5d8f3ba6940d87869cf6ce5e9d8eee5089a4a48e9bc27406c73b26a05e301578
+    53fd093df1e772fd827eb42c71fcb6975e02b2984fac4cf2135a89b166c2c36d
+    b54220d3281c16a204c26d78fb129560f69fe3e7f90807c45c5b6fddbab9bdf5
+    7e2952fce6e033529ec0ec60675fa5b39db408b67255f4c0fdebc9fb663c8456
+    bf9804c82d41080b14d21f8c3ffa80237bce66dde1213ce860192eb01f8ca157
+    231dd71f9f6662fbab3472ed1d1705c62f7fcf59cc60f00ba7e4ccc71b1e7669
+    2eddc6e0d64f850a7210a51d051593f012ce1e6fbb65904e448ceeabcab0fcfb
+    b89359c3a5709d897436a3a689672e230c7923f84c10815912d0171246eb2b95
+    16c49c092267e35df988fc575afbfded0c0f8f6a4f311fa1e2aa123f2c6efcfa
+    e5a061c34c913316127a71f6fc08c64161b93aa7d969096e69eca91ad71d32a1
+    2a9d171f9c23d9cfe4072ffd3788dc4b7036bd3222eda6c09d5fc62014995376
+    e89c9ef66088752b6cac409f0c89bed4584dc82103a9c36b78851b0dea630213
+    d3c92c3076520cd53fcabb899d5992b62caa63b960be21613befdc745187b861
+    401e148c5fdf94072d3fb587782fcbfd0b7ee48d6d2edd45d25f51d9427e97ef
+    3d235ad20bd43741edb6d5fd5cd94e403d4af2d506c075150ee21a5bc3746893
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7350 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 0.x block</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    c3aecb59fcf22412f2bc3a204bad4d547bda2bbc927cbc48962f0fe64d3de091
+    a1555bf940c705c030ddbb953a4f3300cf72dd8fd62792a4732eca600fd333af
+    7b42766ac8457890cdd0a6d6a3da22e69bd2a0e76d2ef63f5dd5bb30f510bc94
+    1ec185a210bf0c0c70890156368350db72c8cbb11a50f327fe08b097a41eec25
+    59238e0419b8f1b0221a7eaf6827ef4c7e905e7e1648d4726deee4ddadd0f886
+    a39c4a86e25a3c0cc661bbc8f3c6d082a157346bb205bd2efa0c6a4e329a3381
+    38bbce767b95acc7bd640db69b5bbf9793637f1b517bdf249770c2fedef848fc
+    641ef63d041987bcfa8bbf6cef4400873f42732d4c207489427eb4c641a13959
+    77cb28f5c8a2d9befa7abac7be0ef49452692c977af95ce7ed60f24e3ec1665b
+    89a27c5e50689a19ecb4c24e22a4924912d55b3dd8829a3732d916d342b5f522
+    f6dd23e0d021adf501196823bc62f3cdd2cb1ce6c6e02cab6bbcc4903d571855
+    1774a212814886a556e6aa05581309f8c30919eea1b4b785d49db44a8543c80a
+    5d8a268fa2e9b54c2570dd3f8f4276b5541e1f396bdf896b92a3cec305a3c0af
+    8a061761da2a1f261665bfc23d82b97eef35c5869493923a2c7c4f7bfcb9d936
+    a54e54302842d10cc86602329232ca180d933f3489844ddf3f517f4c14f6bebb
+    bf10d28dbd76be62d18174fc55be43c6b7c84883ea28a48947a785954c335a4e
+    ae1c8c5acd5a98449532
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7500 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1 block</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    c3aecb59fcf22412f2bc3a204bad4d540e7f6a23fdeb041b24c4344e0e396248
+    108097909aaf8428f52f629df18e74865856e605654887084976a42a27b55a10
+    7c49c48ecc8cd379d28ec78e37e2d7b523d3bd82d1a2f4969b28b060c770167a
+    3f7f92acf1a225c437736e07a4324f12a0c3232d55d5b49264cb74485c9fd672
+    2e98206ee555c0f4f7c1afccd55b87e45ec846394395293ddee19a7ed8809bb4
+    8c57e6416cd430dbb2f6a82e74d8d2da2354a8d672b8873d57e9e3bb9383ea80
+    a69b67c6cfab4b3e7fe9d4f838da904c36a7e908f90dff24b02e307fcd2717cf
+    c8545894ec93f74bea39581f14d1af2a6e6857908d7a5502a64e0a03d5929bd2
+    d63a227745c91c2cfc9428a44aa4a813b39218007e8688651dad66d061c42463
+    fe7921dcc8f4f307c876e59f783f05ca7dce811c9fa6e1ceab51866051a19117
+    35242e4978d02f93d84b7d4699780b6b1c155a15183ec400a5688b0298309c2f
+    1dd514dbcea5f546cba5d7193b8b12b6cd0ebf632a2945f65f1db93e7c4015e8
+    6e6954e364592f4d672f3fb4e21bf0972fab6cf1803c06d2719f291d3710418e
+    57404df988d7ebad55f7afcb81a3a9e6837fba2f642318a89f428e17650ef8cc
+    3381a01d5d1d87c52163469d7008b1a826cc78a3ee148e748a4a737c2b611bca
+    aa9ce955a4caacc6c581542b6ad3fc16401814c3ff4ec3dd250a7da50030ee17
+    2c29bd9b61d53b87c2836ca530be6c48
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7600 times, compressed as a default zlib stream
+</code></pre>
+
+<p>1 chunk + 1.x block</p>
+
+<pre><code>Key: 67f1daf3b15d185494b0924272ff6f627226a0a7e8ab5e52df6ac2117f9e1793
+IV: b6e8955cf8b453b51aced43f8a1d814c
+Ciphertext:
+    c3aecb59fcf22412f2bc3a204bad4d540e7f6a23fdeb041b24c4344e0e396248
+    108097909aaf8428f52f629df18e74865856e605654887084976a42a27b55a10
+    7c49c48ecc8cd379d28ec78e37e2d7b523d3bd82d1a2f4969b28b060c770167a
+    3f7f92acf1a225c437736e07a4324f12a0c3232d55d5b49264cb74485c9fd672
+    2e98206ee555c0f4f7c1afccd55b87e45ec846394395293ddee19a7ed8809bb4
+    8c57e6416cd430dbb2f6a82e74d8d2da2354a8d672b8873d57e9e3bb9383ea80
+    a69b67c6cfab4b3e7fe9d4f838da904c36a7e908f90dff24b02e307fcd2717cf
+    c8545894ec93f74bea39581f14d1af2a6e6857908d7a5502a64e0a03d5929bd2
+    d63a227745c91c2cfc9428a44aa4a813b39218007e8688651dad66d061c42463
+    fe7921dcc8f4f307c876e59f783f05ca7dce811c9fa6e1ceab51866051a19117
+    35242e4978d02f93d84b7d4699780b6b1c155a15183ec400a5688b0298309c2f
+    1dd514dbcea5f546cba5d7193b8b12b6cd0ebf632a2945f65f1db93e7c4015e8
+    6e6954e364592f4d672f3fb4e21bf0972fab6cf1803c06d2719f291d3710418e
+    57404df988d7ebad55f7afcb81a3a9e6837fba2f642318a89f428e17650ef8cc
+    3381a01d5d1d87c52163469d7008b1a826cc78a3ee148e748a4a737c2b611bca
+    aa9ce955a4caacc6c581542b6ad3fc16401814c3ff4ec3dd250a7da50030ee17
+    aba04eb2b4bd46ea00f20450e318d6767d6d285cf271
+ Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 7700 times, compressed as a default zlib stream
+</code></pre>
+
+<p>2.x chunks</p>
+
+<pre><code>Key: 855ecc286bb4f1adab26bd39514d4f4eb60181849c3bc605fb3fb78846e0cfef
+IV: bf205053393a02f3927c8f0836660a9f
+Ciphertext:
+    a30447c3f0fa2ea97c29c99b07505f371a0c5b1112305be4736f4706a47a34c3
+    599ad1898829071c026c4fbec6df430c4373d1ff7950ec69ffef689da8cde708
+    7371816bbd659257c6dc9707d5377ef8c54ebe6eb7ee6f223ab88eed36da993c
+    4b894fe6a10a81ef0808e2e7ea45a9c8a5a3392d7c11dada91a0d11ea4baef12
+    bd66bbcaabc4e5544fb6d6d85431246ded3e83c8756679d58bcc6d2bc892e5e5
+    fcf6111f9b038ea23bd051bfe22ea7f0782a05a12d7c599f25dc6398a15b1828
+    954446d8f3338b9675465f1a6f42efdf65694c2cdf69db482f60b61b89f970ff
+    90cbe4cbff523f4f168af847e95a2c2ab4c4d525997a3c9e6a442d46830edcf4
+    649a880da6771b2c99a14a2fccbc3dcc03be8e975462765f223ef9abaace0f46
+    0215f8afa6b853c1fa4948c4e129631ab9e50687063c6953316c4aeda50fb318
+    cebaa94f2505e47db0710166780ec2952892654f9d06604d7e42543ffb60af10
+    a7409a16a1186ff7174e6ab9f25c58f1da968401171a62f97ec6a8f456466d87
+    6f8898c3fd7fb63d55a331ac643ce75e2808729df1ea958302d4be13f5c9e211
+    b15fac84d6d3ebea1e98af2ec70ba2aa0bf2b8cb863249952460a61cea8d5339
+    957035878a732390dbcfa62c4e4e3a0ab451247736475807bcfaeae331c70fae
+    78e0ca56df5534877eb38d1ac01aeca89714cf55199169bf463c7abde98019b2
+    76ba1214c0022e564114a34b9b1ad21d343a3416afd87e7c4eadf768607decf3
+    330ac6af2eeef7872d2e005c5c638deb39235ac43ffcad080237f046d66fc2b0
+    4e90edf23f724101059822064c483f6248bd7e317cef21bf422821edd7d0e424
+    acf6ff9663b8e4eb5f66e2efd847d4f26e65954972b201a615c96a21beadc319
+    0df9a3d22ca388e37c0df160b5b825679c39f621d4a14327778e9b062c6bfea4
+    ccb09653fc77329a0b56cff825eed9e1398cd4811691bd60825a2b79d310a9e2
+    4ba935296f66d4bf31956807678f71d7cdfa44309f3952632973654ddbfcf454
+    76ecee15c99f7d19088be4a52b827ee20e0266177955146697bd28f83cc091e9
+    e87d1638f920e6dbd15c46dea93f443ffd643983aeca11f491953723c0bd116a
+    5d53d42424e572a1dc495e08b16f2764272bb28e612436e17d6bb59db55cedc9
+    ccf15062adb378929e83c9e153785be71ce8b60908166ff5459c5db9d45b8c90
+    1fd0815a29d6b614d1a6c25baf758ad8de481b24fff90a0c8428cc031d67288f
+    a3f639f75f36d09ea06f95508b3424431ea000320a8e70ed179987a3054333af
+    b27b35750f883cdd76e35664e68762c5ac225d42d94f971b390b5aa3576f8d55
+    6f9f461c0bb19a613084d0aa8991d42f9877d8d52b16aa19174b4350e6d47b69
+    0b65a517c4caf76843aaa8ec6bcba271b00a2bde75f246c5cf181006f0912668
+    13aa92bdf8837e5b0e5d8a7a81f2d1f7bbace93ca43f6a22c32e357736cd43c3
+    3b775b8b3bf3bf9d001eb8a0b3b5a3d29a176d22feb73520f0873bbb54ee30ad
+    b3e801b38c8a10de549f02caf122e42cb5c47ec6f4d5d2a133f8ffc1ceb1fc0f
+    c76ac6828b8b2e7d96e93b79f488db7255c92a05dd266bea0a2125b84cc65454
+    96d0e66ddb9cac2d85faeb2bd82fffa9505c4e17ab6bf4bdb41fb3f73b98bcd3
+    44390e882c28dccae5b5d06ece848a1b170fd1f2b16a8020eca3de33e6af2548
+    7e731106fc7a6efb3162b0af756462f151fb8de71b5d6f67483977bf40361c80
+    adfccacf69e21f4b75cd7058304a9e99a7ba87c009f47288e31169a66cf76655
+    f9f6bf0ee88ac0ec38befcb156752c4b5ecd4b0eae5241fe9bb84df1c9
+Expected result: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' (ascii) 20000 times, compressed as a default zlib stream
+</code></pre>
+
+<h2>Conventions and references <a name="conventions-and-references"></a></h2>
+
+<ul>
+<li><p>uint32le: unsigned int on 4 bytes, little endian.</p></li>
+<li><p>uint32be: unsigned int on 4 bytes, big endian.</p></li>
+<li><p>uint64le: unsigned int on 8 bytes, little endian.</p></li>
+<li><p>uchar: unsigned char on 1 byte.</p></li>
+<li><p>(hexadecimal): represents 1 byte with 2 hexadecimal numbers. <br />
+e.g. 4142 (hexadecimal) means decimal values 65 and then 66.</p></li>
+<li><p>(ascii): represents 1 byte with the matching 1-byte ASCII value. <br />
+e.g. 'AB\0' means decimal values 65 then 66 and then 0.</p></li>
+<li><p>UTF-16LE: text encoded using 2-byte Unicode, little-endian, without
+Byte Order Mark (BOM), as commonly used under MS Windows.</p></li>
+<li><p>IV: initialization vector for AES encryption and decryption.</p></li>
+<li><p>CBC: Cipher Block Chaining, see <a href="http://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf">Recommendation for Block Cipher Modes of
+Operation</a>
+and
+<a href="https://en.wikipedia.org/wiki/Block_cipher_mode_of_operation#Cipher_Block_Chaining_.28CBC.29">Wikipedia</a>.</p></li>
+<li><p>CTS: CipherText Stealing, one type of end-of-stream handling, see
+<a href="http://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a-add.pdf">Recommendation for Block Cipher Modes of Operation: Three Variants
+of Ciphertext Stealing for CBC
+Mode</a>
+and <a href="https://en.wikipedia.org/wiki/Ciphertext_stealing">Wikipedia</a>.</p></li>
+<li><p>PBA, PBE: password-based authentication, password-based encryption;
+see <a href="http://docs.oasis-open.org/pkcs11/pkcs11-curr/v2.40/os/pkcs11-curr-v2.40-os.html#_Toc416960155">PKCS #11 Cryptographic Token Interface Current Mechanisms
+Specification</a>.</p></li>
+<li><p>MS-CFB: Compound File Binary Format, documented at
+<a href="https://msdn.microsoft.com/en-us/library/dd942138.aspx">MSDN</a>,
+<a href="https://github.com/libyal/libolecf/blob/master/documentation/OLE%20Compound%20File%20format.asciidoc">libolecf</a>,
+<a href="https://en.wikipedia.org/wiki/Compound_File_Binary_Format">Wikipedia</a>. <br />
+Libraries that can manipulate this format include
+<a href="http://www.decalage.info/python/olefileio">olefile</a>,
+<a href="http://github.com/libyal/libolecf/">libolecf</a> and
+<a href="https://github.com/mrkarthik07/libforensics">libforensics</a>.</p></li>
+<li><p>MS-OLEPS: OLE Property Set, documented at
+<a href="https://msdn.microsoft.com/en-us/library/dd942421.aspx">MSDN</a> and
+<a href="https://github.com/libyal/libfole/blob/master/documentation/OLE%20definitions.asciidoc">libfole</a>. <br />
+The 'oleps.py' demo from
+<a href="https://github.com/mrkarthik07/libforensics">libforensics</a> displays
+detailed information on MS-OLEPS streams;
+<a href="http://www.decalage.info/python/olefileio">olefile</a> and
+<a href="http://github.com/libyal/libolecf/">libolecf</a> have basic support.</p></li>
+<li><p>TLV : Type-Length-Value encoding ; 4 bytes for type, 4 bytes for
+length (uint32be), and a variable-sized value; see
+<a href="https://en.wikipedia.org/wiki/Type-length-value">Type-length-value</a>
+at Wikipedia for the general principle.</p></li>
+<li><p>FILETIME: timestamp as 1/10000000s since January 1, 1601 (UTC), see
+<a href="https://msdn.microsoft.com/en-us/library/windows/desktop/ms724284%28v%3Dvs.85%29.aspx">FILETIME structure</a>
+at MSDN.</p></li>
+</ul>
+
+<h2>History</h2>
+
+<ul>
+<li>2017-09-10: initial publication</li>
+<li>2017-09-11: clarifications and typo fixes; new History section</li>
+<li>2017-09-19: link Loïc's implementation</li>
+</ul>
+
+<h2>Feedback</h2>
+
+<p>Feel free to send comments at <a href="mailto:beuc@beuc.net">beuc@beuc.net</a>.
+If you have .zed files that you think are not covered by this
+document, please send them as well (replace sensitive files with other
+ones). The author's GPG key can be found at
+<a href="https://pgp.mit.edu/pks/lookup?op=vindex&amp;search=0x8FF1CB6E8D89059F">8FF1CB6E8D89059F</a>.</p>
+
+  </body>
+</html>
