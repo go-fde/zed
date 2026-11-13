@@ -401,7 +401,8 @@ func (f *fileWriter) abort() {
 	f.w.stored -= int64(len(f.e.stream))
 	delete(f.w.byPath, f.e.path)
 	f.w.totalPath -= len(f.e.path)
-	f.w.nFiles--
+	// nFiles is not given back: the ordinal of a later file may already
+	// be taken, and File<n> names must stay unique. A gap is harmless.
 }
 
 // Close finishes the file: it joins the archive's catalog.

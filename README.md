@@ -65,11 +65,17 @@ refuse (names, paths, depth, entry counts, sizes: the same `Limits`), with
 modify existing archives, and holds the archive in memory (1 GiB by default,
 `WithMaxArchiveSize`).
 
-**What is and is not known about ZED! opening these archives.** Three values of
-the seal (a `_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which
-real archives have) are SHA-256 of `_ctlfile`, of `_catalog` and of the watermark
-picture; the other three, the hash in the seal stream, and two 32-byte values of
-every file's catalog entry could not be derived, and are written random.
+**What is and is not known about ZED! opening these archives.** No archive
+written by `Create` has been opened by ZED! yet: sample archives
+(`TestWriteSamples`) are being tried in ZED! Free 2026.3 and ZED! Limited
+Edition, and this section will say what they accept. Three values of the seal (a
+`_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which real archives
+have) are SHA-256 of `_ctlfile`, of `_catalog` and of the watermark picture; the
+other three and the hash in the seal stream could not be derived, and are
+written random. Of the two 32-byte values in every file's catalog entry, the
+`0x00400500` one is written as the SHA-256 of the file's encrypted stream and the
+other is random. As in ZED! itself, each catalog entry also carries a
+half-anonymous name in clear, `File<n><ext>`, which reveals the file's extension.
 Whether ZED! checks them is found out by trying: `WithSeal(SealNone)`,
 `SealPropertyOnly` and `WithoutWatermark` exist for that. The watermark picture
 is our own plain white one (the real one is Prim'X's). `archive_createdwith` is
