@@ -3,6 +3,8 @@ package zed
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/binary"
+	"os"
 	"testing"
 )
 
@@ -28,4 +30,15 @@ func entry(t testing.TB, a *Archive, path string) *Entry {
 		t.Fatalf("the archive has no entry %q", path)
 	}
 	return e
+}
+
+var leOrder = binary.LittleEndian
+
+func mustReadFile(t testing.TB, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
