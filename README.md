@@ -1,7 +1,7 @@
 # zed
 
-Pure-Go reader for Prim'X ZED! encrypted archives (`.zed`), for users who hold
-a password.
+Pure-Go reader and writer for Prim'X ZED! encrypted archives (`.zed`), for
+users who hold a password.
 
 ```go
 a, err := zed.OpenFile("archive.zed", password)
@@ -40,8 +40,49 @@ reader; `WithLimits` replaces the defaults below.
 
 Out of scope, and said so: **RSA users** (the archive still opens with a
 password user; with none, `Open` returns `ErrUnsupported` naming the method),
-**writing** archives, the optional streams (watermark picture, seal), and
-the on-the-fly folder variant.
+**modifying** an existing archive, reading the optional streams (watermark
+picture, seal), and the on-the-fly folder variant.
+
+## Writing (new archives)
+
+```go
+w, err := zed.Create(file, password, zed.WithStrength(32)) // AES-256; 16 is the default
+if err != nil { ... }
+w.Mkdir("Documents")
+err = w.AddFile("Documents/notes.txt", r) // or f, _ := w.Create(path); f.Write(...); f.Close()
+err = w.Close() // the archive is held in memory and written here
+```
+
+`Create` writes a new archive with one password user in the layout ZED! Free
+2026.3 writes: container version 4, `_ctlfile` version `0200`, hash 43
+(PBKDF2-HMAC-SHA-512, 200 000 and 100 000 iterations), the per-file IV, CTS,
+512-byte chunks, zlib, and the same TLV items in the same order (a test compares
+the tag sequences with the ones read from two real containers, and with the real
+containers themselves when `ZED_CORPUS` is set). Salts, IVs, the archive key and
+the file identifiers come from `crypto/rand`. It refuses what the reader would
+refuse (names, paths, depth, entry counts, sizes: the same `Limits`), with
+`ErrArgument` or `ErrLimit`; what it writes is read back by `Open`. It does not
+modify existing archives, and holds the archive in memory (1 GiB by default,
+`WithMaxArchiveSize`).
+
+**What is and is not known about ZED! opening these archives.** No archive
+written by `Create` has been opened by ZED! yet: sample archives
+(`TestWriteSamples`) are being tried in ZED! Free 2026.3 and ZED! Limited
+Edition, and this section will say what they accept. Three values of the seal (a
+`_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which real archives
+have) are SHA-256 of `_ctlfile`, of `_catalog` and of the watermark picture; the
+other three and the hash in the seal stream could not be derived, and are
+written random. Of the two 32-byte values in every file's catalog entry, the
+`0x00400500` one is written as the SHA-256 of the file's encrypted stream and the
+other is random. As in ZED! itself, each catalog entry also carries a
+half-anonymous name in clear, `File<n><ext>`, which reveals the file's extension.
+Whether ZED! checks them is found out by trying: `WithSeal(SealNone)`,
+`SealPropertyOnly` and `WithoutWatermark` exist for that. The watermark picture
+is our own plain white one (the real one is Prim'X's). `archive_createdwith` is
+ZED! Free 2026.3's by default (`WithCreatedWith`). AES-256 (`WithStrength(32)`)
+puts the IV right after the 32-byte key in the PBKDF2 output, as the reader
+infers; no real container with a 32-byte key has been seen. The archives are not
+ANSSI-qualified, and nothing here is a Prim'X product.
 
 ## Limits (untrusted input)
 
