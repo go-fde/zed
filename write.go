@@ -613,7 +613,7 @@ func (w *Writer) catalog() ([]byte, error) {
 func (w *Writer) control() []byte {
 	c := w.c
 	now := c.now()
-	sealKey := w.rnd(16)
+	sealKey := w.rnd(c.strength) // as long as the archive key: ZED! checks it
 	w.sealKey = sealKey
 	blk, _ := aes.NewCipher(w.fileKey)
 	sealIV := w.rnd(16)
