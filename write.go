@@ -510,21 +510,26 @@ func (w *Writer) Close() error {
 	// The seal stream's hash covers the finished container, so the image is
 	// built first and the hash patched into it.
 	var img bytes.Buffer
-	if _, err = cw.WriteTo(&img); err != nil {
-		return err
-	}
+	_, _ = cw.WriteTo(&img) // into memory, and the limits were sized for it above
 	b := img.Bytes()
-	off, err := locate(b, seal)
-	if err != nil {
-		return err
+	if err = sealImage(b, seal, record, hashAt, w.sealKey, ftBytes(now)); err == nil {
+		_, err = w.dst.Write(b)
 	}
-	mac, err := globalSeal(b, off, record, w.sealKey, ftBytes(now))
-	if err != nil {
-		return err
-	}
-	copy(b[off+hashAt:], mac)
-	_, err = w.dst.Write(b)
 	return err
+}
+
+// sealImage finds the seal stream in the finished image and patches its hash in.
+func sealImage(img, stream []byte, record, hashAt int, sealKey, ts []byte) error {
+	off, err := locate(img, stream)
+	if err != nil {
+		return err
+	}
+	mac, err := globalSeal(img, off, record, sealKey, ts)
+	if err != nil {
+		return err
+	}
+	copy(img[off+hashAt:], mac)
+	return nil
 }
 
 func (w *Writer) png() []byte { return watermarkPNG() }

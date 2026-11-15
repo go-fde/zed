@@ -236,6 +236,36 @@ func TestGlobalSealRecomputable(t *testing.T) {
 	}
 }
 
+func TestSealImageAndClose(t *testing.T) {
+	stream := append(random(200, 5), make([]byte, 100)...)
+	img := append(append(make([]byte, 4096), stream...), make([]byte, 100)...)
+	k, ts := []byte("k"), make([]byte, 8)
+	if err := sealImage(img, stream, 200, 168, k, ts); err != nil {
+		t.Fatal(err)
+	}
+	// Absent, or present twice: not one run of bytes.
+	if err := sealImage(make([]byte, 5000), stream, 200, 168, k, ts); err == nil {
+		t.Error("absent stream accepted")
+	}
+	twice := append(append(append(make([]byte, 4096), stream...), stream...), 0)
+	if err := sealImage(twice, stream, 200, 168, k, ts); err == nil {
+		t.Error("duplicated stream accepted")
+	}
+	// A record that does not fit the image.
+	fresh := append(append(make([]byte, 4096), stream...), make([]byte, 100)...)
+	if err := sealImage(fresh, stream, 1<<20, 168, k, ts); err == nil {
+		t.Error("oversized record accepted")
+	}
+	// A failing destination is reported after a full seal.
+	w, err := Create(failWriter{}, "pw", WithRandom(seeded(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err == nil {
+		t.Error("write failure not reported")
+	}
+}
+
 func TestGlobalSealRefusesAnUnplaceableStream(t *testing.T) {
 	img := make([]byte, 3<<20)
 	for _, c := range []struct {
