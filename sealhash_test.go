@@ -307,11 +307,10 @@ func TestSealPlacementSweep(t *testing.T) {
 	for size := 0; size <= 40*4096; size += 4093 {
 		for _, pad := range []int{0, 4096} {
 			var out bytes.Buffer
-			w, err := Create(&out, pw, WithRandom(seeded(uint64(size)+1)), WithClock(fixedClock()))
+			w, err := Create(&out, pw, WithRandom(seeded(uint64(size)+1)), WithClock(fixedClock()), withSealPad(pad))
 			if err != nil {
 				t.Fatal(err)
 			}
-			w.c.sealPad = pad
 			if size > 0 {
 				mustAdd(t, w, "f", random(size, uint64(size)))
 			}
