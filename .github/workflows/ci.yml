@@ -44,6 +44,24 @@ jobs:
           echo "coverage: $total"
           [ "$total" = "100.0%" ]
 
+  # cmd/zedgui is a separate module (macOS-only driver); its pure logic is
+  # tested here, the live GUI part needs ZEDFREE and an Accessibility grant.
+  zedgui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cmd/zedgui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...
+
   race:
     name: race (${{ matrix.arch }})
     strategy:
