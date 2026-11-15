@@ -3,7 +3,7 @@ module github.com/go-fde/zed/cmd/zedgui
 go 1.27.1
 
 require (
-	github.com/go-macos/accessibility v0.6.0
+	github.com/go-macos/accessibility v0.6.1
 	github.com/spf13/cobra v1.10.2
 )
 
