@@ -357,3 +357,43 @@ func TestSealPlacementSweep(t *testing.T) {
 		t.Fatal("the padded layout was never exercised")
 	}
 }
+
+// ZED! Free unwraps the seal key against the archive key's length and refuses
+// a seal key of another length ([807A0103]): the seal key is as long as the
+// archive key, and every seal value is computed under it.
+func TestSealKeyLengthFollowsStrength(t *testing.T) {
+	for _, strength := range []int{16, 32} {
+		const pw = "key-length"
+		img := build(t, pw, []CreateOption{WithStrength(strength)}, func(w *Writer) { mustAdd(t, w, "a", []byte("hello")) })
+		cf, err := cfb.Open(bytes.NewReader(img), int64(len(img)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, catBlob := sealKeyOf(t, cf, pw)
+		if len(key) != strength {
+			t.Fatalf("strength %d: seal key of %d bytes", strength, len(key))
+		}
+		top, _ := parseTLV(catBlob)
+		checked := 0
+		for _, it := range top {
+			if it.tag != 0x80110600 {
+				continue
+			}
+			props, _ := parseTLV(it.val)
+			h40, ok := props.first(0x00400500)
+			if !ok {
+				continue
+			}
+			idb, _ := props.first(tagFileID)
+			var id [16]byte
+			copy(id[:], idb)
+			if want := refHMAC(key, id[:], refDigest(id, []byte("hello"))); !bytes.Equal(h40, want) {
+				t.Errorf("strength %d: file value not under the seal key", strength)
+			}
+			checked++
+		}
+		if checked != 1 {
+			t.Fatalf("checked %d", checked)
+		}
+	}
+}

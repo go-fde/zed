@@ -49,9 +49,9 @@ picture, seal), and the on-the-fly folder variant.
 > package, and **ZED! Free 2026.3.6 opens an AES-128 archive written with the
 > default full seal without any warning** (checked by driving ZEDFREE, see
 > below). The seal is computed in full since the global hash and the per-file
-> values were recovered (see "The seal"). Still open: AES-256 archives are
-> refused by ZEDFREE, extracting a file through the GUI was not tested, and the
-> writer was tried on one release of ZED! Free only. Status:
+> values were recovered (see "The seal"); so do AES-256 archives. Still open:
+> extracting a file through the GUI was not tested, and the writer was tried on
+> one release of ZED! Free only. History:
 > [issue #21](https://github.com/go-fde/zed/issues/21).
 >
 > | archive written by `Create` | ZEDFREE 2026.3.6 |
@@ -60,7 +60,7 @@ picture, seal), and the on-the-fly folder variant.
 > | AES-128, empty, full seal | **opens, no warning**, empty list |
 > | AES-128, seal property only | warning, then opens (no seal stream) |
 > | AES-128, no seal, or no watermark | warning, then back to the start screen, not opened |
-> | AES-256 (`WithStrength(32)`) | refused, [807A0103] |
+> | AES-256 (`WithStrength(32)`), full seal | **opens, no warning**; tree and list right |
 > | extracting a file through the GUI | not tested |
 
 ```go
@@ -98,11 +98,15 @@ no human involved:
   Yes, to its empty start screen with no message, the archive not opened. With
   the `_seals` property only (`SealPropertyOnly`) it opens after the warning.
   (Only the no-seal samples were tried without the watermark storage.)
-- **AES-256 is refused** by ZEDFREE 2026.3.6 with "Encrypted container open
+- **AES-256 archives open too, with no warning**, since the seal key is as long
+  as the archive key. Before that they were refused ("Encrypted container open
   failed [807A0103]: A cryptographic key length is not compatible with a
-  cryptographic operation". Whether ZED! Free supports AES-256 at all is unknown
-  (it may be an Enterprise feature); the reader's 32-byte-key layout (IV after
-  the key) is still inferred, not verified on a real container.
+  cryptographic operation"): ZED! Free unwraps the seal key and checks its
+  length against the archive key's, and `Create` wrote a 16-byte seal key
+  whatever the strength. It was a defect of the archive, not an edition gate
+  (found by stopping ZEDFREE at the check; the 32-byte-key layout, the IV after
+  the key, is thereby confirmed on ZEDFREE's side, though not on a real AES-256
+  container made by ZED!).
 - **Extracting a file through the GUI was not tested**; only the tree and the
   list (names, sizes shown rounded) were compared with what was written. The
   content of files is checked by our own reader only.
