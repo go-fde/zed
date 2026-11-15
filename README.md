@@ -47,8 +47,8 @@ picture, seal), and the on-the-fly folder variant.
 
 > **Experimental.** Archives written by `Create` are read back by this
 > package, but **ZED! Free 2026.3.6 opens them only after a "Corrupted
-> encrypted container!" warning** (then read only), because the global seal
-> hash and the per-file seal values are not reproduced. AES-256 archives are
+> encrypted container!" warning** (then read only); the global seal hash and
+> the per-file seal values are not reproduced, which is most likely why. AES-256 archives are
 > refused by ZEDFREE. Do not rely on `Create` where ZED! must accept the
 > archive without the warning. Status, what is reproduced and what was tried:
 > [issue #21](https://github.com/go-fde/zed/issues/21).
@@ -91,10 +91,11 @@ no human involved:
   Yes, the tree and file list are right and the container is read only. **No
   archive written by `Create` opens without that warning yet.**
 - **Without a seal the archive does not open**: with no `_seals` property and
-  no seal stream (`SealNone`), or without the watermark storage, ZEDFREE shows
-  the same warning and, after Yes, returns to its empty start screen with no
-  message. With the `_seals` property only (`SealPropertyOnly`), or the full
-  placeholder seal, it opens after the warning.
+  no seal stream (`SealNone`), with or without the watermark storage, ZEDFREE
+  shows the same warning and, after Yes, returns to its empty start screen with
+  no message. With the `_seals` property only (`SealPropertyOnly`), or the full
+  seal, it opens after the warning. (Only the no-seal samples were tried without
+  the watermark storage.)
 - **AES-256 is refused** by ZEDFREE 2026.3.6 with "Encrypted container open
   failed [807A0103]: A cryptographic key length is not compatible with a
   cryptographic operation". Whether ZED! Free supports AES-256 at all is unknown
@@ -128,7 +129,7 @@ HMAC-SHA-256 of SHA-256(block number, encrypted block, file id) encrypted under
 the archive key; about 2 million combinations (block size, number encoding and
 base, field order, per block, chained or concatenated, five IVs, three modes)
 did not reproduce either on a real container, so `Create` writes the SHA-256 of
-the stream and random bytes, which ZED! does not accept as genuine. As in ZED!
+the stream and random bytes, which do not match what ZED! stores. As in ZED!
 itself, each catalog entry also
 carries a half-anonymous name in clear, `File<n><ext>`, which reveals the file's
 extension. The watermark picture is our own plain white one (the real one is

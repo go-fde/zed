@@ -34,7 +34,8 @@ var ErrArgument = errors.New("zed: invalid argument")
 // both. The seal holds six SHA-256 sized values: the SHA-256 of _ctlfile, of
 // _catalog and of the watermark picture, each followed by the HMAC-SHA-256 of
 // that digest under the seal key stored in _ctlfile. The hash in the seal
-// stream, which ZED! checks and which could not be reproduced, is written
+// stream, which most likely is what ZED! checks and which could not be
+// reproduced, is written
 // random, so ZED! Free warns that the container is corrupted whichever mode is
 // used; without any seal it does not open the archive at all.
 type SealMode int
@@ -515,8 +516,9 @@ func (w *Writer) catalog() ([]byte, error) {
 			put(tagNameCiphertext, fd.encrypt(fd.iv[:], nameBytes(e.name))))
 		if !e.dir {
 			// Three items every file has in a ZED! Free 2026.3 catalog: a byte and
-			// two 32-byte values whose meaning is not known; they are written as the
-			// SHA-256 of the file's encrypted stream and random.
+			// two 32-byte values which the SSTIC 2024 paper (fig. 11) describes as
+			// encrypted HMACs and which could not be reproduced (issue #21); they are
+			// written as the SHA-256 of the file's encrypted stream and random.
 			sum := sha256.Sum256(e.stream)
 			props = append(props, put(0x00390500, []byte{0}), put(0x00400500, sum[:]), put(0x00410500, w.rnd(32)))
 		}
