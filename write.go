@@ -34,21 +34,27 @@ var ErrArgument = errors.New("zed: invalid argument")
 // both. The seal holds six SHA-256 sized values: the SHA-256 of _ctlfile, of
 // _catalog and of the watermark picture, each followed by the HMAC-SHA-256 of
 // that digest under the seal key stored in _ctlfile. The hash in the seal
-// stream, which most likely is what ZED! checks and which could not be
-// reproduced, is written
-// random, so ZED! Free warns that the container is corrupted whichever mode is
-// used; without any seal it does not open the archive at all.
+// stream covers the whole container, and each file entry carries two HMACs of
+// its own (see seal.go). With SealFull all of them are computed and ZED! Free
+// opens the archive without a warning; with fewer it warns that the container
+// is corrupted, and without any seal it does not open the archive at all.
 type SealMode int
 
 const (
-	// SealPlaceholders writes the seal as ZED! Free 2026.3 lays it out, with
-	// the three digests and their HMACs, and random values for the hash in
-	// the seal stream and for the per-file values (see issue #21).
-	SealPlaceholders SealMode = iota
+	// SealFull writes the seal as ZED! Free 2026.3 does, every value computed:
+	// the three digests and their HMACs, the hash in the seal stream and the
+	// per-file values.
+	SealFull SealMode = iota
 	// SealNone writes no seal at all.
 	SealNone
 	// SealPropertyOnly writes the _seals property but no seal stream.
 	SealPropertyOnly
+
+	// SealPlaceholders is the former name of SealFull, from when two of the
+	// values could not be computed and were written random.
+	//
+	// Deprecated: use SealFull.
+	SealPlaceholders = SealFull
 )
 
 const (
@@ -158,6 +164,7 @@ type wentry struct {
 	modified   time.Time
 	accessed   time.Time
 	stream     []byte
+	plainSum   []byte // the digest of the content, see blockXOR
 	ordinal    int
 	done       bool
 }
@@ -338,7 +345,7 @@ func (w *Writer) Create(p string) (io.WriteCloser, error) {
 		return nil, err
 	}
 	w.open++
-	f := &fileWriter{w: w, e: e, dec: w.dec.withFile(e.id)}
+	f := &fileWriter{w: w, e: e, dec: w.dec.withFile(e.id), px: newBlockXOR(e.id)}
 	f.zw = zlib.NewWriter(sinkFunc(f.put)) // the compressed bytes go to put, chunk by chunk
 	return f, nil
 }
@@ -353,6 +360,7 @@ type fileWriter struct {
 	chunk  []byte
 	index  uint64
 	plain  int64
+	px     *blockXOR // the digest of the content (see seal.go)
 	closed bool
 	failed error
 }
@@ -369,8 +377,10 @@ func (f *fileWriter) Write(p []byte) (int, error) {
 		f.failed = fmt.Errorf("%w: %q is larger than %d bytes", ErrLimit, f.e.path, f.w.c.lim.MaxFileSize)
 		return 0, f.failed
 	}
-	f.plain += int64(len(p))
-	return f.zw.Write(p) // the compressed bytes come back through put
+	n, err := f.zw.Write(p) // the compressed bytes come back through put
+	f.plain += int64(n)
+	f.px.Write(p[:n])
+	return n, err
 }
 
 // put receives the compressed bytes from zlib: the writer's output side.
@@ -433,6 +443,7 @@ func (f *fileWriter) Close() error {
 	f.closed = true
 	f.w.open--
 	f.e.size = f.plain
+	f.e.plainSum = f.px.sum()
 	f.e.done = true
 	f.w.entries = append(f.w.entries, f.e)
 	return nil
@@ -457,14 +468,14 @@ func (w *Writer) Close() error {
 		return fmt.Errorf("%w: %d files are still open", ErrArgument, w.open)
 	}
 	w.closed = true
+	ctl := w.control() // first: it draws the seal key the catalog's values need
 	catalog, err := w.catalog()
 	if err != nil {
 		return err
 	}
-	ctl := w.control()
 	now := w.c.now()
 	meta := w.metadata(ctl, catalog)
-	seal := w.sealStream(now)
+	seal, record, hashAt := w.sealStream(now)
 	if w.err != nil { // the random source failed while the metadata was drawn
 		return w.err
 	}
@@ -492,8 +503,33 @@ func (w *Writer) Close() error {
 			add(streamName(e.id), e.stream)
 		}
 	}
-	_, err = cw.WriteTo(w.dst)
+	if w.c.seal == SealNone || w.c.seal == SealPropertyOnly {
+		_, err = cw.WriteTo(w.dst)
+		return err
+	}
+	// The seal stream's hash covers the finished container, so the image is
+	// built first and the hash patched into it.
+	var img bytes.Buffer
+	_, _ = cw.WriteTo(&img) // into memory, and the limits were sized for it above
+	b := img.Bytes()
+	if err = sealImage(b, seal, record, hashAt, w.sealKey, ftBytes(now)); err == nil {
+		_, err = w.dst.Write(b)
+	}
 	return err
+}
+
+// sealImage finds the seal stream in the finished image and patches its hash in.
+func sealImage(img, stream []byte, record, hashAt int, sealKey, ts []byte) error {
+	off, err := locate(img, stream)
+	if err != nil {
+		return err
+	}
+	mac, err := globalSeal(img, off, record, sealKey, ts)
+	if err != nil {
+		return err
+	}
+	copy(img[off+hashAt:], mac)
+	return nil
 }
 
 func (w *Writer) png() []byte { return watermarkPNG() }
@@ -515,12 +551,16 @@ func (w *Writer) catalog() ([]byte, error) {
 			put(tagFileWritten, ftBytes(e.modified)), put(tagFileAccessed, ftBytes(e.accessed)),
 			put(tagNameCiphertext, fd.encrypt(fd.iv[:], nameBytes(e.name))))
 		if !e.dir {
-			// Three items every file has in a ZED! Free 2026.3 catalog: a byte and
-			// two 32-byte values which the SSTIC 2024 paper (fig. 11) describes as
-			// encrypted HMACs and which could not be reproduced (issue #21); they are
-			// written as the SHA-256 of the file's encrypted stream and random.
-			sum := sha256.Sum256(e.stream)
-			props = append(props, put(0x00390500, []byte{0}), put(0x00400500, sum[:]), put(0x00410500, w.rnd(32)))
+			// Three items every file has in a ZED! Free 2026.3 catalog: a byte (0
+			// in every container seen) and two 32-byte integrity values (the SSTIC
+			// 2024 paper, fig. 11, describes them as encrypted HMACs; a real
+			// container holds them as plain HMACs). They are the HMAC under the
+			// seal key of the digest of the file's content and of the digest of
+			// its encrypted stream (see seal.go).
+			sx := newBlockXOR(e.id)
+			sx.Write(e.stream)
+			props = append(props, put(0x00390500, []byte{0}),
+				put(0x00400500, fileSeal(w.sealKey, e.id, e.plainSum)), put(0x00410500, fileSeal(w.sealKey, e.id, sx.sum())))
 		}
 		out = append(out, put(tagFileProps, props...)...)
 	}
@@ -556,15 +596,20 @@ func (w *Writer) control() []byte {
 }
 
 // sealStream is ~zedCFSTG_PGI_SEAL_STREAM: a short TLV record, zero padded to
-// 8192 bytes.
-func (w *Writer) sealStream(now time.Time) []byte {
+// 8192 bytes. The hash it carries is a random placeholder of the stream's
+// length; Close replaces it, at hashAt, once the container is laid out. record
+// is the length of the record that precedes the padding.
+func (w *Writer) sealStream(now time.Time) (stream []byte, record, hashAt int) {
+	hash := w.rnd(32)
 	payload := cat(put(0x80100200, be32(1)), put(0x80110500, ftBytes(now)),
-		put(0x80120600, put(0x80210200, be32(1)), put(0x80220200, be32(0x1000)), put(0x80230200, be32(2))),
-		put(0x80130600, put(0x80100200, be32(1)), put(0x80120600, put(0x80300500, w.rnd(32)))))
+		put(0x80120600, put(0x80210200, be32(1)), put(0x80220200, be32(sealBlockSize)), put(0x80230200, be32(2))),
+		put(0x80130600, put(0x80100200, be32(1)), put(0x80120600, put(0x80300500, hash))))
 	out := binary.LittleEndian.AppendUint32(nil, 1)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(payload)))
 	out = append(out, payload...)
-	return append(out, make([]byte, 8192-len(out))...)
+	record = len(out)
+	hashAt = bytes.LastIndex(out, hash)
+	return append(out, make([]byte, 8192-len(out))...), record, hashAt
 }
 
 // metadata encodes the OLEPS stream: code page, locale, the dictionary naming

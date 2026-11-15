@@ -62,7 +62,7 @@ func TestWriteSamples(t *testing.T) {
 		opts       []CreateOption
 		files      bool
 	}{
-		{"aes128-seal.zed", "AES-128 (what ZED! Free 2026.3 writes), the seal with the three HMACs and random values for the rest (ZEDFREE 2026.3.6 warns, then opens it)", nil, true},
+		{"aes128-seal.zed", "AES-128 (what ZED! Free 2026.3 writes), the full seal, every value computed (ZEDFREE 2026.3.6 opens it without a warning)", nil, true},
 		{"aes256-seal.zed", "AES-256 (ZED! Enterprise), the same seal (ZEDFREE 2026.3.6 refuses it, [807A0103])", []CreateOption{WithStrength(32)}, true},
 		{"aes128-noseal.zed", "AES-128, no seal at all (no _seals property, no seal stream)", []CreateOption{WithSeal(SealNone)}, true},
 		{"aes128-sealproperty-only.zed", "AES-128, the _seals property but no seal stream", []CreateOption{WithSeal(SealPropertyOnly)}, true},

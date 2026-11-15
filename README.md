@@ -46,17 +46,19 @@ picture, seal), and the on-the-fly folder variant.
 ## Writing (new archives): EXPERIMENTAL
 
 > **Experimental.** Archives written by `Create` are read back by this
-> package, but **ZED! Free 2026.3.6 opens them only after a "Corrupted
-> encrypted container!" warning** (then read only); the global seal hash and
-> the per-file seal values are not reproduced, which is most likely why. AES-256 archives are
-> refused by ZEDFREE. Do not rely on `Create` where ZED! must accept the
-> archive without the warning. Status, what is reproduced and what was tried:
+> package, and **ZED! Free 2026.3.6 opens an AES-128 archive written with the
+> default full seal without any warning** (checked by driving ZEDFREE, see
+> below). The seal is computed in full since the global hash and the per-file
+> values were recovered (see "The seal"). Still open: AES-256 archives are
+> refused by ZEDFREE, extracting a file through the GUI was not tested, and the
+> writer was tried on one release of ZED! Free only. Status:
 > [issue #21](https://github.com/go-fde/zed/issues/21).
 >
 > | archive written by `Create` | ZEDFREE 2026.3.6 |
 > |---|---|
-> | AES-128, full seal (default), also seal property only | warning, then opens; tree and list right |
-> | AES-128, empty | warning, then opens with an empty list |
+> | AES-128, full seal (default) | **opens, no warning**; tree and list right |
+> | AES-128, empty, full seal | **opens, no warning**, empty list |
+> | AES-128, seal property only | warning, then opens (no seal stream) |
 > | AES-128, no seal, or no watermark | warning, then back to the start screen, not opened |
 > | AES-256 (`WithStrength(32)`) | refused, [807A0103] |
 > | extracting a file through the GUI | not tested |
@@ -85,17 +87,17 @@ modify existing archives, and holds the archive in memory (1 GiB by default,
 driving ZEDFREE 2026.3.6 through the macOS Accessibility API (`cmd/zedgui`), with
 no human involved:
 
-- An AES-128 archive written by `Create` is **opened by ZED! Free 2026.3.6 only
-  after a "Corrupted encrypted container!" warning** ("a modification
-  unauthorized by the creator of the container was performed", Yes/No); after
-  Yes, the tree and file list are right and the container is read only. **No
-  archive written by `Create` opens without that warning yet.**
-- **Without a seal the archive does not open**: with no `_seals` property and
-  no seal stream (`SealNone`), with or without the watermark storage, ZEDFREE
-  shows the same warning and, after Yes, returns to its empty start screen with
-  no message. With the `_seals` property only (`SealPropertyOnly`), or the full
-  seal, it opens after the warning. (Only the no-seal samples were tried without
-  the watermark storage.)
+- An AES-128 archive written by `Create` with the default full seal is
+  **opened by ZED! Free 2026.3.6 with no warning**, the tree and list right
+  (seven files and three folders, one of them one mebibyte, so the global hash
+  spans two blocks; and an empty archive).
+- **Without the full seal ZED! shows the "Corrupted encrypted container!"
+  warning** ("a modification unauthorized by the creator of the container was
+  performed", Yes/No). With no `_seals` property and no seal stream
+  (`SealNone`), with or without the watermark storage, it then returns, after
+  Yes, to its empty start screen with no message, the archive not opened. With
+  the `_seals` property only (`SealPropertyOnly`) it opens after the warning.
+  (Only the no-seal samples were tried without the watermark storage.)
 - **AES-256 is refused** by ZEDFREE 2026.3.6 with "Encrypted container open
   failed [807A0103]: A cryptographic key length is not compatible with a
   cryptographic operation". Whether ZED! Free supports AES-256 at all is unknown
@@ -106,30 +108,53 @@ no human involved:
   content of files is checked by our own reader only.
 
 The seal (a `_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which
-real containers have) holds six 32-byte values. Reproduced on two real ZED! Free
-containers, and written by `Create`: SHA-256 of `_ctlfile`, of `_catalog` and of
-the watermark picture's stream, and, after each, **HMAC-SHA-256 of that digest
-under the seal key** (the 16-byte key stored, encrypted with the archive key,
-in the `_ctlfile`). Recomputing all six on a real container leaves it open
-without a warning in ZEDFREE (checked). But changing any byte of a real
-container (any stream, the CFB directory or its header) raises the warning even
-when those six are recomputed, and so does a change in a byte nothing uses (the
-slack after a stream, a free directory entry, a free FAT entry): something
-covers the raw file. Most likely it is the hash in the seal stream (algorithm 2,
-blocks of 4096 bytes in the stream's header), **which could not be reproduced**
-(tested: SHA-256 and HMAC-SHA-256 with the seal key, the archive key and the IVs,
-over the file with the hash or the whole seal stream zeroed or removed, its
-4096-byte blocks numbered or not, chained, concatenated or as a tree, the
-streams and their prefixes and suffixes; the stored value also decrypted under
-five IVs; written random). Removing the three HMAC items from `_seals`, as
-Mougey describes (SSTIC 2024, "Zed-Files", p. 19, remark 2), does not avoid the
-warning either. The two per-file values in the catalog (`0x00400500`,
-`0x00410500`) are, according to the same paper (fig. 11, p. 30), the
-HMAC-SHA-256 of SHA-256(block number, encrypted block, file id) encrypted under
-the archive key; about 2 million combinations (block size, number encoding and
-base, field order, per block, chained or concatenated, five IVs, three modes)
-did not reproduce either on a real container, so `Create` writes the SHA-256 of
-the stream and random bytes, which do not match what ZED! stores. As in ZED!
+real containers have) is fully computed by `Create`:
+
+- **`_seals`, six 32-byte values.** SHA-256 of `_ctlfile`, of `_catalog` and of
+  the watermark picture's stream, and, after each, the HMAC-SHA-256 of that
+  digest under the **seal key** (the 16-byte key stored, encrypted with the
+  archive key, in the `_ctlfile`).
+- **The hash in the seal stream (tag `0x80300500`)** covers the whole container
+  image. The image is cut into blocks of 1 MiB (the block size the stream
+  states, tag `0x80220200`; the last block is short); each block is hashed with
+  SHA-256, with the seal stream's own record (its 8-byte header and TLV payload,
+  not the zero padding that follows) read as `0xA5` bytes. The digests in order,
+  followed by the stream's 8-byte timestamp (tag `0x80110500`), are the input of
+  an HMAC-SHA-256 under the seal key. The record has to lie within one block and
+  not begin on a block boundary, which ZED! itself requires; `Create` refuses
+  the (rare) archive that would place it otherwise.
+- **The two per-file values of the catalog (`0x00400500`, `0x00410500`).** For a
+  byte string, take its 512-byte blocks (the last one short, not padded);
+  block *i* gives SHA-256(LE64(*i*) || file id || block), and the results are
+  XORed together (32 zero bytes for an empty file). The file id is the 16 raw
+  bytes of tag `0x80300500` of the entry. `0x00400500` is the HMAC-SHA-256,
+  under the seal key, of the file id followed by this digest of the **file's
+  content** (before compression); `0x00410500` is the same over the file's
+  **stream as stored** (compressed and encrypted). They are plain HMACs, not
+  encrypted as the SSTIC 2024 paper (fig. 11) describes.
+
+**How these were found, and the legal basis.** The first versions of this writer
+could not reproduce the last two (about two million combinations of block sizes,
+encodings and orders failed). They were recovered by analysing how ZED! Free
+2026.3.6 computes and checks them (disassembly of the application and
+observation of its own checks while it opened test containers), and then
+confirmed on a real container and by opening the written archives in ZEDFREE
+without a warning. This was done for interoperability, as Directive 2009/24/EC
+of the European Union, article 6, allows (the decompilation needed to obtain the
+information to achieve the interoperability of an independently created program
+with other programs), by a person with the right to use the copy analysed. Its
+only purpose is to reproduce the file format: the descriptions above are the
+format, written in our own words; no code, table or string of the application is
+copied into this repository, and the application was not modified or
+redistributed. The values are checked here by tests that recompute them from the
+written image with code that shares nothing with the writer
+(`sealhash_test.go`).
+
+Changing any byte of a container (any stream, the CFB directory or its header,
+even a byte nothing else uses) changes the global hash, so ZED! shows the
+warning; the hash has to be computed last, on the finished image. Removing the
+three HMAC items from `_seals`, as Mougey describes (SSTIC 2024, "Zed-Files",
+p. 19, remark 2), does not avoid the warning. As in ZED!
 itself, each catalog entry also
 carries a half-anonymous name in clear, `File<n><ext>`, which reveals the file's
 extension. The watermark picture is our own plain white one (the real one is
