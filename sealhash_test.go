@@ -240,21 +240,25 @@ func TestSealImageAndClose(t *testing.T) {
 	stream := append(random(200, 5), make([]byte, 100)...)
 	img := append(append(make([]byte, 4096), stream...), make([]byte, 100)...)
 	k, ts := []byte("k"), make([]byte, 8)
-	if err := sealImage(img, stream, 200, 168, k, ts); err != nil {
-		t.Fatal(err)
+	if ok, err := sealImage(img, stream, 200, 168, k, ts); !ok || err != nil {
+		t.Fatal(ok, err)
 	}
 	// Absent, or present twice: not one run of bytes.
-	if err := sealImage(make([]byte, 5000), stream, 200, 168, k, ts); err == nil {
+	if _, err := sealImage(make([]byte, 5000), stream, 200, 168, k, ts); err == nil {
 		t.Error("absent stream accepted")
 	}
 	twice := append(append(append(make([]byte, 4096), stream...), stream...), 0)
-	if err := sealImage(twice, stream, 200, 168, k, ts); err == nil {
+	if _, err := sealImage(twice, stream, 200, 168, k, ts); err == nil {
 		t.Error("duplicated stream accepted")
 	}
-	// A record that does not fit the image.
+	// A record too long for a block is reported as unplaceable, not as an error.
 	fresh := append(append(make([]byte, 4096), stream...), make([]byte, 100)...)
-	if err := sealImage(fresh, stream, 1<<20, 168, k, ts); err == nil {
-		t.Error("oversized record accepted")
+	if ok, err := sealImage(fresh, stream, 1<<20, 168, k, ts); ok || err != nil {
+		t.Error("oversized record:", ok, err)
+	}
+	// A record that runs past the image.
+	if _, err := sealImage(fresh, stream, 1000, 168, k, ts); err == nil {
+		t.Error("record past the end accepted")
 	}
 	// A failing destination is reported after a full seal.
 	w, err := Create(failWriter{}, "pw", WithRandom(seeded(1)))
@@ -287,5 +291,69 @@ func TestGlobalSealRefusesAnUnplaceableStream(t *testing.T) {
 	}
 	if !bytes.Equal(img, make([]byte, len(img))) {
 		t.Error("globalSeal changed the image")
+	}
+}
+
+// With block boundaries close enough to reach, no content size makes Close fail
+// or write an archive whose hash is not the recomputed one. Sizes are swept
+// across several boundaries; some land the seal stream on one and force the
+// padded layout.
+func TestSealPlacementSweep(t *testing.T) {
+	old := sealBlockSize
+	sealBlockSize = 4 * 4096
+	defer func() { sealBlockSize = old }()
+	const pw = "sweep"
+	padded := 0
+	for size := 0; size <= 40*4096; size += 4093 {
+		for _, pad := range []int{0, 4096} {
+			var out bytes.Buffer
+			w, err := Create(&out, pw, WithRandom(seeded(uint64(size)+1)), WithClock(fixedClock()), withSealPad(pad))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if size > 0 {
+				mustAdd(t, w, "f", random(size, uint64(size)))
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("size %d pad %d: %v", size, pad, err)
+			}
+			img := out.Bytes()
+			cf, err := cfb.Open(bytes.NewReader(img), int64(len(img)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, _ := sealKeyOf(t, cf, pw)
+			stream, _ := cf.ReadAll(cf.Lookup(sealStreamName), 1<<30)
+			off := bytes.Index(img, stream)
+			n := 8 + int(binary.LittleEndian.Uint32(stream[4:]))
+			if !placeable(off, n) {
+				t.Fatalf("size %d: stream at %d is unplaceable", size, off)
+			}
+			if pad > 0 {
+				padded++
+			}
+			outer, _ := parseTLV(stream[8:n])
+			ts, _ := outer.first(0x80110500)
+			in, _ := outer.first(0x80130600)
+			ip, _ := parseTLV(in)
+			hp, _ := ip.first(0x80120600)
+			hh, _ := parseTLV(hp)
+			got, _ := hh.first(0x80300500)
+			m := append([]byte(nil), img...)
+			for i := off; i < off+n; i++ {
+				m[i] = 0xA5
+			}
+			var table []byte
+			for p := 0; p < len(m); p += sealBlockSize {
+				s := sha256.Sum256(m[p:min(len(m), p+sealBlockSize)])
+				table = append(table, s[:]...)
+			}
+			if !bytes.Equal(got, refHMAC(key, table, ts)) {
+				t.Fatalf("size %d pad %d: wrong hash", size, pad)
+			}
+		}
+	}
+	if padded == 0 {
+		t.Fatal("the padded layout was never exercised")
 	}
 }

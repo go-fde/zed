@@ -45,9 +45,13 @@ const (
 	// the three digests and their HMACs, the hash in the seal stream and the
 	// per-file values.
 	SealFull SealMode = iota
-	// SealNone writes no seal at all.
+	// SealNone writes no seal at all. ZED! Free 2026.3.6 refuses such an
+	// archive (a corruption warning, then it does not open it): the option
+	// exists to study that, not to produce usable archives.
 	SealNone
-	// SealPropertyOnly writes the _seals property but no seal stream.
+	// SealPropertyOnly writes the _seals property but no seal stream. ZED!
+	// Free 2026.3.6 warns about corruption and opens it only after Yes; same
+	// remark as SealNone.
 	SealPropertyOnly
 
 	// SealPlaceholders is the former name of SealFull, from when two of the
@@ -115,7 +119,12 @@ type creator struct {
 	watermark   bool
 	maxArchive  int64
 	strength    int
+	sealPad     int // test hook: start the seal stream's placement at this padding
 }
+
+// withSealPad is a test hook: it starts the placement of the seal stream with
+// the padded layout (see Close).
+func withSealPad(n int) CreateOption { return func(c *creator) { c.sealPad = n } }
 
 // WithStrength selects the AES key size in bytes: 16 (AES-128, what ZED! Free
 // 2026.3 writes, the default) or 32 (AES-256, which ZED! Enterprise offers).
@@ -482,17 +491,57 @@ func (w *Writer) Close() error {
 	if int64(len(meta)) > int64(w.c.lim.MaxMetadata) {
 		return fmt.Errorf("%w: the metadata is %d bytes, limit %d", ErrLimit, len(meta), w.c.lim.MaxMetadata)
 	}
+	if w.c.seal == SealNone || w.c.seal == SealPropertyOnly {
+		_, err = w.layout(meta, seal, now, -1).WriteTo(w.dst)
+		return err
+	}
+	// The seal stream's hash covers the finished container, so the image is
+	// built in memory first and the hash patched into it. The stream has to
+	// start inside a block and not on its boundary (see globalSeal). It sits
+	// right after the container's tables, so that is all but always so; when it
+	// is not, the metadata is zero padded by a sector and put in front of it,
+	// which moves the stream on by more than a sector. The offsets only grow
+	// and the boundaries are a mebibyte apart, so the loop ends at the second
+	// pass at the latest.
+	for pad := w.c.sealPad; ; pad += sectorPad {
+		var img bytes.Buffer
+		_, _ = w.layout(meta, seal, now, pad).WriteTo(&img) // into memory; the limits were sized for it
+		b := img.Bytes()
+		placed, err := sealImage(b, seal, record, hashAt, w.sealKey, ftBytes(now))
+		if placed || err != nil {
+			if err == nil {
+				_, err = w.dst.Write(b)
+			}
+			return err
+		}
+	}
+}
+
+// sectorPad is what the metadata grows by to move the seal stream: one sector
+// of the version 4 container.
+const sectorPad = 4096
+
+// layout is the container: with pad < 0 no seal stream; with pad == 0 the seal
+// stream first; otherwise the metadata, padded with pad zero bytes, then the
+// seal stream.
+func (w *Writer) layout(meta, seal []byte, now time.Time, pad int) *cfb.Writer {
 	// The container writer cannot refuse what follows: the names are constants or
 	// 30 hex digits of identifiers newEntry has checked are distinct, the parents
 	// exist, and the limits leave room for everything the writer accepted.
-	cw := cfb.NewWriter(cfb.WithVersion(4), cfb.WithLimits(len(w.entries)+16, w.c.maxArchive+int64(len(meta))+(1<<20)))
+	cw := cfb.NewWriter(cfb.WithVersion(4), cfb.WithLimits(len(w.entries)+16, w.c.maxArchive+int64(len(meta))+int64(max(pad, 0))+(1<<20)))
 	at := cfb.Attrs{Created: now, Modified: now}
 	cw.SetRoot(cfb.Attrs{CLSID: rootCLSID})
 	add := func(name string, data []byte) { _ = cw.AddStream(name, data, at) }
-	if w.c.seal != SealNone && w.c.seal != SealPropertyOnly {
+	switch {
+	case pad < 0:
+		add(metadataStream, meta)
+	case pad == 0:
+		add(sealStreamName, seal)
+		add(metadataStream, meta)
+	default:
+		add(metadataStream, append(append([]byte(nil), meta...), make([]byte, pad)...))
 		add(sealStreamName, seal)
 	}
-	add(metadataStream, meta)
 	if w.c.watermark {
 		_ = cw.AddStorage(watermarkStorage, cfb.Attrs{CLSID: watermarkCLSID, Created: now, Modified: now})
 		add(watermarkStorage+"/CONTENTS", watermarkContents)
@@ -503,33 +552,26 @@ func (w *Writer) Close() error {
 			add(streamName(e.id), e.stream)
 		}
 	}
-	if w.c.seal == SealNone || w.c.seal == SealPropertyOnly {
-		_, err = cw.WriteTo(w.dst)
-		return err
-	}
-	// The seal stream's hash covers the finished container, so the image is
-	// built first and the hash patched into it.
-	var img bytes.Buffer
-	_, _ = cw.WriteTo(&img) // into memory, and the limits were sized for it above
-	b := img.Bytes()
-	if err = sealImage(b, seal, record, hashAt, w.sealKey, ftBytes(now)); err == nil {
-		_, err = w.dst.Write(b)
-	}
-	return err
+	return cw
 }
 
-// sealImage finds the seal stream in the finished image and patches its hash in.
-func sealImage(img, stream []byte, record, hashAt int, sealKey, ts []byte) error {
+// sealImage finds the seal stream in the finished image and patches its hash
+// in. It reports false, touching nothing, if the stream lies where its hash
+// cannot be computed.
+func sealImage(img, stream []byte, record, hashAt int, sealKey, ts []byte) (bool, error) {
 	off, err := locate(img, stream)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !placeable(off, record) {
+		return false, nil
 	}
 	mac, err := globalSeal(img, off, record, sealKey, ts)
 	if err != nil {
-		return err
+		return false, err
 	}
 	copy(img[off+hashAt:], mac)
-	return nil
+	return true, nil
 }
 
 func (w *Writer) png() []byte { return watermarkPNG() }
@@ -602,7 +644,7 @@ func (w *Writer) control() []byte {
 func (w *Writer) sealStream(now time.Time) (stream []byte, record, hashAt int) {
 	hash := w.rnd(32)
 	payload := cat(put(0x80100200, be32(1)), put(0x80110500, ftBytes(now)),
-		put(0x80120600, put(0x80210200, be32(1)), put(0x80220200, be32(sealBlockSize)), put(0x80230200, be32(2))),
+		put(0x80120600, put(0x80210200, be32(1)), put(0x80220200, be32(uint32(sealBlockSize))), put(0x80230200, be32(2))),
 		put(0x80130600, put(0x80100200, be32(1)), put(0x80120600, put(0x80300500, hash))))
 	out := binary.LittleEndian.AppendUint32(nil, 1)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(payload)))
