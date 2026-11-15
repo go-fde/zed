@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -15,8 +17,8 @@ import (
 )
 
 const (
-	appName   = "ZEDFREE"
-	appBundle = "com.primx.zed"
+	appName = "ZEDFREE"
+	appExe  = "/Applications/ZEDFREE.app/Contents/MacOS/zed"
 )
 
 // Session is one ZEDFREE process started by this tool.
@@ -28,13 +30,17 @@ type Session struct {
 }
 
 func findPID() int {
-	apps, err := ax.Applications()
+	// Not ax.Applications: NSWorkspace's list is a cache that lags in both
+	// directions (a killed process stays, a started one is missing). The
+	// process table is the authority; the full executable path tells ZEDFREE
+	// from the Zed editor, whose executable is also called "zed".
+	out, err := exec.Command("pgrep", "-f", "^"+regexp.QuoteMeta(appExe)+"$").Output()
 	if err != nil {
 		return 0
 	}
-	for _, a := range apps {
-		if a.Bundle == appBundle {
-			return a.PID
+	for _, f := range strings.Fields(string(out)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid != os.Getpid() {
+			return pid
 		}
 	}
 	return 0
@@ -56,6 +62,11 @@ func requireTrust() error {
 // Launch opens the archive in ZEDFREE. It refuses if ZEDFREE already runs: the
 // session must own the process it will quit.
 func Launch(archive string, timeout time.Duration) (*Session, error) {
+	// A process this tool just quit can linger in the application list for a
+	// few seconds; give it that long before taking it for someone's own.
+	for i := 0; i < 40 && findPID() != 0; i++ {
+		time.Sleep(250 * time.Millisecond)
+	}
 	if findPID() != 0 {
 		return nil, errors.New("ZEDFREE is already running; quit it first (this tool only quits what it started)")
 	}
@@ -323,6 +334,9 @@ func (s *Session) Quit() {
 	if s.pid == 0 {
 		return
 	}
+	// LaunchServices keeps answering for the process for a moment after it is
+	// gone, and an `open` in that moment goes to nobody: let it forget.
+	defer time.Sleep(3 * time.Second)
 	_ = syscall.Kill(s.pid, syscall.SIGTERM)
 	for i := 0; i < 25; i++ {
 		if findPID() != s.pid {
