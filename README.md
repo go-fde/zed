@@ -96,14 +96,24 @@ under the seal key** (the 16-byte key stored, encrypted with the archive key,
 in the `_ctlfile`). Recomputing all six on a real container leaves it open
 without a warning in ZEDFREE (checked). But changing any byte of a real
 container (any stream, the CFB directory or its header) raises the warning even
-when those six are recomputed, so something else covers the whole file: most
-likely the hash in the seal stream (algorithm 2, blocks of 4096 bytes in the
-stream's header), **which could not be reproduced** (tested: SHA-256 and
-HMAC-SHA-256 with seven candidate keys over the file, its 4096-byte blocks, the
-streams and their prefixes and suffixes; written random). The
-per-file `0x00400500` value is **not** the SHA-256 of the file's encrypted
-stream in the real containers (measured); `Create` still writes that, and the
-other (`0x00410500`) at random. As in ZED! itself, each catalog entry also
+when those six are recomputed, and so does a change in a byte nothing uses (the
+slack after a stream, a free directory entry, a free FAT entry): something
+covers the raw file. Most likely it is the hash in the seal stream (algorithm 2,
+blocks of 4096 bytes in the stream's header), **which could not be reproduced**
+(tested: SHA-256 and HMAC-SHA-256 with the seal key, the archive key and the IVs,
+over the file with the hash or the whole seal stream zeroed or removed, its
+4096-byte blocks numbered or not, chained, concatenated or as a tree, the
+streams and their prefixes and suffixes; the stored value also decrypted under
+five IVs; written random). Removing the three HMAC items from `_seals`, as
+Mougey describes (SSTIC 2024, "Zed-Files", p. 19, remark 2), does not avoid the
+warning either. The two per-file values in the catalog (`0x00400500`,
+`0x00410500`) are, according to the same paper (fig. 11, p. 30), the
+HMAC-SHA-256 of SHA-256(block number, encrypted block, file id) encrypted under
+the archive key; about 2 million combinations (block size, number encoding and
+base, field order, per block, chained or concatenated, five IVs, three modes)
+did not reproduce either on a real container, so `Create` writes the SHA-256 of
+the stream and random bytes, which ZED! does not accept as genuine. As in ZED!
+itself, each catalog entry also
 carries a half-anonymous name in clear, `File<n><ext>`, which reveals the file's
 extension. The watermark picture is our own plain white one (the real one is
 Prim'X's). `archive_createdwith` is ZED! Free 2026.3's by default
