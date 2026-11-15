@@ -256,6 +256,31 @@ ciphertext, nested folders deeper than one, several users, SHA-1, mode 103,
 21, 22 and 43, and any `0100` archive (so the rule that `0100` keeps the
 global IV rests on the 2017 vectors only).
 
+### Testing an archive in the real application: `cmd/zedgui`
+
+`cmd/zedgui` (its own Go module, so this library keeps its dependencies) opens
+an archive in `/Applications/ZEDFREE.app`, enters the password and prints what
+ZEDFREE shows: the file and folder list, or the exact text of the message. It
+drives the application through the macOS Accessibility API
+([go-macos/accessibility](https://github.com/go-macos/accessibility)), so no
+human clicks anything.
+
+```
+ZED_GUI=1 go run github.com/go-fde/zed/cmd/zedgui@latest check \
+    --password-file README.md --expect hello.txt --expect Documents archive.zed
+```
+
+- The password is the last non-empty line of `--password-file` (or the first
+  `` `quoted` `` token of the line holding `--password-marker`). It is read by
+  the program, never printed, and every editable field's value is withheld from
+  every dump.
+- `--wrong-password` is the negative control (a refusal is expected).
+  `--continue` answers Yes to a Yes/No warning and reports what follows.
+- The terminal that runs it must be allowed in System Settings, Privacy &
+  Security, Accessibility. The tool never prompts and never works around that.
+- It refuses to run if ZEDFREE is already open, and quits what it started.
+- The archives under test stay outside the repository.
+
 ## The CFB reader
 
 The container is read by
