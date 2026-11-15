@@ -41,7 +41,8 @@ type SealMode int
 
 const (
 	// SealPlaceholders writes the seal as ZED! Free 2026.3 lays it out, with
-	// the three known hashes and random values for the unknown ones.
+	// the three digests and their HMACs, and random values for the hash in
+	// the seal stream and for the per-file values (see issue #21).
 	SealPlaceholders SealMode = iota
 	// SealNone writes no seal at all.
 	SealNone

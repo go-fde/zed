@@ -43,10 +43,26 @@ password user; with none, `Open` returns `ErrUnsupported` naming the method),
 **modifying** an existing archive, reading the optional streams (watermark
 picture, seal), and the on-the-fly folder variant.
 
-## Writing (new archives)
+## Writing (new archives): EXPERIMENTAL
+
+> **Experimental.** Archives written by `Create` are read back by this
+> package, but **ZED! Free 2026.3.6 opens them only after a "Corrupted
+> encrypted container!" warning** (then read only), because the global seal
+> hash and the per-file seal values are not reproduced. AES-256 archives are
+> refused by ZEDFREE. Do not rely on `Create` where ZED! must accept the
+> archive without the warning. Status, what is reproduced and what was tried:
+> [issue #21](https://github.com/go-fde/zed/issues/21).
+>
+> | archive written by `Create` | ZEDFREE 2026.3.6 |
+> |---|---|
+> | AES-128, full seal (default), also seal property only | warning, then opens; tree and list right |
+> | AES-128, empty | warning, then opens with an empty list |
+> | AES-128, no seal, or no watermark | warning, then back to the start screen, not opened |
+> | AES-256 (`WithStrength(32)`) | refused, [807A0103] |
+> | extracting a file through the GUI | not tested |
 
 ```go
-w, err := zed.Create(file, password, zed.WithStrength(32)) // AES-256; 16 is the default
+w, err := zed.Create(file, password) // AES-128, which ZED! Free writes; WithStrength(32) for AES-256
 if err != nil { ... }
 w.Mkdir("Documents")
 err = w.AddFile("Documents/notes.txt", r) // or f, _ := w.Create(path); f.Write(...); f.Close()
