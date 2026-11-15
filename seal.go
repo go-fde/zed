@@ -17,13 +17,15 @@ import (
 const (
 	// fileBlock is the unit of the per-file values: 512 bytes.
 	fileBlock = 512
-	// sealBlockSize is the block size of the global value, as the seal stream
-	// states it (tag 0x80220200).
-	sealBlockSize = 1 << 20
 	// sealMask is what the global value sees in place of the seal stream's own
 	// record.
 	sealMask = 0xA5
 )
+
+// sealBlockSize is the block size of the global value, as the seal stream states
+// it (tag 0x80220200). A variable only so that a test can make the block
+// boundaries close enough to reach.
+var sealBlockSize = 1 << 20
 
 // blockXOR computes the digest a ZED! Free file entry keeps of a byte string.
 // The string is cut into 512-byte blocks, the last one possibly short and not
@@ -107,7 +109,7 @@ func fileSeal(sealKey []byte, id [16]byte, digest []byte) []byte {
 // the seal key. The record has to lie within one block and not begin on a block
 // boundary; the application's own check cannot be satisfied otherwise.
 func globalSeal(img []byte, off, n int, sealKey, ts []byte) ([]byte, error) {
-	if off <= 0 || off%sealBlockSize == 0 || off%sealBlockSize+n > sealBlockSize || off+n > len(img) {
+	if !placeable(off, n) || off+n > len(img) {
 		return nil, fmt.Errorf("zed: the seal stream lies at offset %d of %d, where its hash cannot be computed", off, len(img))
 	}
 	saved := append([]byte(nil), img[off:off+n]...)
@@ -124,6 +126,12 @@ func globalSeal(img []byte, off, n int, sealKey, ts []byte) ([]byte, error) {
 	m := hmac.New(sha256.New, sealKey)
 	m.Write(table)
 	return m.Sum(nil), nil
+}
+
+// placeable says whether a record of n bytes at off can be sealed: it must lie
+// within one block and not begin on a block boundary.
+func placeable(off, n int) bool {
+	return off > 0 && off%sealBlockSize != 0 && off%sealBlockSize+n <= sealBlockSize
 }
 
 // sealBlock is the length of the block that starts at p.

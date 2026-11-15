@@ -121,8 +121,14 @@ real containers have) is fully computed by `Create`:
   not the zero padding that follows) read as `0xA5` bytes. The digests in order,
   followed by the stream's 8-byte timestamp (tag `0x80110500`), are the input of
   an HMAC-SHA-256 under the seal key. The record has to lie within one block and
-  not begin on a block boundary, which ZED! itself requires; `Create` refuses
-  the (rare) archive that would place it otherwise.
+  not begin on a block boundary, which ZED! itself requires. It sits right
+  after the container's tables, so it all but always does; when the layout would
+  put it on a boundary, `Close` pads the metadata by one sector and puts it in
+  front of the stream, which moves the stream on (such an archive opens in
+  ZEDFREE with no warning). No content size makes `Close` fail for this.
+  Because the hash covers the finished image and the stream comes first, the
+  image is built in memory before it is written: peak memory is about twice the
+  archive, which `WithMaxArchiveSize` (1 GiB by default) bounds up front.
 - **The two per-file values of the catalog (`0x00400500`, `0x00410500`).** For a
   byte string, take its 512-byte blocks (the last one short, not padded);
   block *i* gives SHA-256(LE64(*i*) || file id || block), and the results are
