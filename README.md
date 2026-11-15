@@ -65,24 +65,50 @@ refuse (names, paths, depth, entry counts, sizes: the same `Limits`), with
 modify existing archives, and holds the archive in memory (1 GiB by default,
 `WithMaxArchiveSize`).
 
-**What is and is not known about ZED! opening these archives.** No archive
-written by `Create` has been opened by ZED! yet: sample archives
-(`TestWriteSamples`) are being tried in ZED! Free 2026.3 and ZED! Limited
-Edition, and this section will say what they accept. Three values of the seal (a
-`_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which real archives
-have) are SHA-256 of `_ctlfile`, of `_catalog` and of the watermark picture; the
-other three and the hash in the seal stream could not be derived, and are
-written random. Of the two 32-byte values in every file's catalog entry, the
-`0x00400500` one is written as the SHA-256 of the file's encrypted stream and the
-other is random. As in ZED! itself, each catalog entry also carries a
-half-anonymous name in clear, `File<n><ext>`, which reveals the file's extension.
-Whether ZED! checks them is found out by trying: `WithSeal(SealNone)`,
-`SealPropertyOnly` and `WithoutWatermark` exist for that. The watermark picture
-is our own plain white one (the real one is Prim'X's). `archive_createdwith` is
-ZED! Free 2026.3's by default (`WithCreatedWith`). AES-256 (`WithStrength(32)`)
-puts the IV right after the 32-byte key in the PBKDF2 output, as the reader
-infers; no real container with a 32-byte key has been seen. The archives are not
-ANSSI-qualified, and nothing here is a Prim'X product.
+**What is and is not known about ZED! opening these archives.** Tested by
+driving ZEDFREE 2026.3.6 through the macOS Accessibility API (`cmd/zedgui`), with
+no human involved:
+
+- An AES-128 archive written by `Create` is **opened by ZED! Free 2026.3.6 only
+  after a "Corrupted encrypted container!" warning** ("a modification
+  unauthorized by the creator of the container was performed", Yes/No); after
+  Yes, the tree and file list are right and the container is read only. **No
+  archive written by `Create` opens without that warning yet.**
+- **Without a seal the archive does not open**: with no `_seals` property and
+  no seal stream (`SealNone`), or without the watermark storage, ZEDFREE shows
+  the same warning and, after Yes, returns to its empty start screen with no
+  message. With the `_seals` property only (`SealPropertyOnly`), or the full
+  placeholder seal, it opens after the warning.
+- **AES-256 is refused** by ZEDFREE 2026.3.6 with "Encrypted container open
+  failed [807A0103]: A cryptographic key length is not compatible with a
+  cryptographic operation". Whether ZED! Free supports AES-256 at all is unknown
+  (it may be an Enterprise feature); the reader's 32-byte-key layout (IV after
+  the key) is still inferred, not verified on a real container.
+- **Extracting a file through the GUI was not tested**; only the tree and the
+  list (names, sizes shown rounded) were compared with what was written. The
+  content of files is checked by our own reader only.
+
+The seal (a `_seals` property and the `~zedCFSTG_PGI_SEAL_STREAM` stream, which
+real containers have) holds six 32-byte values. Reproduced on two real ZED! Free
+containers, and written by `Create`: SHA-256 of `_ctlfile`, of `_catalog` and of
+the watermark picture's stream, and, after each, **HMAC-SHA-256 of that digest
+under the seal key** (the 16-byte key stored, encrypted with the archive key,
+in the `_ctlfile`). Recomputing all six on a real container leaves it open
+without a warning in ZEDFREE (checked). But changing any byte of a real
+container (any stream, the CFB directory or its header) raises the warning even
+when those six are recomputed, so something else covers the whole file: most
+likely the hash in the seal stream (algorithm 2, blocks of 4096 bytes in the
+stream's header), **which could not be reproduced** (tested: SHA-256 and
+HMAC-SHA-256 with seven candidate keys over the file, its 4096-byte blocks, the
+streams and their prefixes and suffixes; written random). The
+per-file `0x00400500` value is **not** the SHA-256 of the file's encrypted
+stream in the real containers (measured); `Create` still writes that, and the
+other (`0x00410500`) at random. As in ZED! itself, each catalog entry also
+carries a half-anonymous name in clear, `File<n><ext>`, which reveals the file's
+extension. The watermark picture is our own plain white one (the real one is
+Prim'X's). `archive_createdwith` is ZED! Free 2026.3's by default
+(`WithCreatedWith`). The archives are not ANSSI-qualified, and nothing here is a
+Prim'X product.
 
 ## Limits (untrusted input)
 

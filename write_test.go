@@ -379,7 +379,7 @@ func TestCreateErrorsPropagate(t *testing.T) {
 			failures++
 		}
 	}
-	if failures < 250 || failures >= 450 {
+	if failures < 200 || failures >= 450 { // fewer draws than the 250 once measured: the seal values are computed, not drawn
 		t.Errorf("%d of 450 runs failed: the random failures were not all noticed, or some run could never succeed", failures)
 	}
 	// A random source that repeats itself gives two files one identifier.

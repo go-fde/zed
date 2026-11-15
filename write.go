@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
@@ -30,10 +31,12 @@ var ErrArgument = errors.New("zed: invalid argument")
 
 // SealMode says what Close writes of the seal: the _seals property of the
 // metadata and the ~zedCFSTG_PGI_SEAL_STREAM stream. ZED! Free 2026.3 writes
-// both. The seal holds six SHA-256 sized values; three of them are the SHA-256
-// of _ctlfile, of _catalog and of the watermark picture, the other three (and
-// the hash in the seal stream) are not known and are written random. It is not
-// known whether ZED! checks them: these modes exist to find out.
+// both. The seal holds six SHA-256 sized values: the SHA-256 of _ctlfile, of
+// _catalog and of the watermark picture, each followed by the HMAC-SHA-256 of
+// that digest under the seal key stored in _ctlfile. The hash in the seal
+// stream, which ZED! checks and which could not be reproduced, is written
+// random, so ZED! Free warns that the container is corrupted whichever mode is
+// used; without any seal it does not open the archive at all.
 type SealMode int
 
 const (
@@ -184,6 +187,7 @@ type Writer struct {
 	pbaSum     []byte
 	filesKeyCT []byte
 	sealKeyCT  []byte
+	sealKey    []byte // the key of the seal's HMACs; control() draws it, metadata() uses it
 	rnd        func(n int) []byte
 	err        error // the first failure of the random source
 }
@@ -525,6 +529,7 @@ func (w *Writer) control() []byte {
 	c := w.c
 	now := c.now()
 	sealKey := w.rnd(16)
+	w.sealKey = sealKey
 	blk, _ := aes.NewCipher(w.fileKey)
 	sealIV := w.rnd(16)
 	md := md5.Sum(nameBytes(c.login))
@@ -566,10 +571,14 @@ func (w *Writer) metadata(ctl, catalog []byte) []byte {
 	var seal []byte
 	withSeal := w.c.seal != SealNone
 	if withSeal {
+		// Each of the three inputs is sealed twice: its SHA-256, then the
+		// HMAC-SHA-256 of that digest under the seal key. Both were found by
+		// experiment and are reproduced on real ZED! Free 2026.3 containers.
 		h := func(b []byte) []byte { s := sha256.Sum256(b); return s[:] }
+		mac := func(d []byte) []byte { m := hmac.New(sha256.New, w.sealKey); m.Write(d); return m.Sum(nil) }
 		seal = cat(put(0x80100200, be32(1)), put(0x80110200, be32(3)),
-			put(0x80120500, h(ctl)), put(0x80130500, w.rnd(32)), put(0x80140500, h(catalog)), put(0x80150500, w.rnd(32)),
-			put(0x00160500, h(w.png())), put(0x00170500, w.rnd(32)))
+			put(0x80120500, h(ctl)), put(0x80130500, mac(h(ctl))), put(0x80140500, h(catalog)), put(0x80150500, mac(h(catalog))),
+			put(0x00160500, h(w.png())), put(0x00170500, mac(h(w.png()))))
 	}
 	pad4 := func(b []byte) []byte {
 		for len(b)%4 != 0 {
