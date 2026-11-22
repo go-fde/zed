@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 
 	"github.com/go-authn/secretsource"
 )
@@ -26,11 +24,10 @@ func secretRef(secret, passfile string) (string, error) {
 }
 
 // resolveSecret opens the reference with go-authn/secretsource, which refuses a
-// file that is not a regular owner-only file and a secret over MaxSize, and
-// returns a private copy of the bytes (the caller wipes it with clear). A
-// file: reference whose last component is a symlink is refused here too:
-// secretsource checks the target's mode, not the link. The deprecation notice
-// for --passfile names no secret.
+// file that is not a regular owner-only file owned by the caller, a symlink at
+// the last component, and a secret over MaxSize, and returns a private copy of
+// the bytes (the caller wipes it with clear). The deprecation notice for
+// --passfile names no secret.
 func resolveSecret(ctx context.Context, secret, passfile string, warn io.Writer) ([]byte, error) {
 	ref, err := secretRef(secret, passfile)
 	if err != nil {
@@ -38,11 +35,6 @@ func resolveSecret(ctx context.Context, secret, passfile string, warn io.Writer)
 	}
 	if passfile != "" && warn != nil {
 		fmt.Fprintln(warn, "warning: --passfile is deprecated, use --secret file:"+passfile)
-	}
-	if path, ok := strings.CutPrefix(ref, "file:"); ok {
-		if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("%s is a symlink: refused", path)
-		}
 	}
 	s, err := secretsource.Open(ctx, ref)
 	if err != nil {

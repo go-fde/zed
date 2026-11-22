@@ -1,8 +1,10 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/ebitengine/purego v0.11.3 h1:OB+JLpdm7ioymhyA+6s5kbb/uOuYycAgL8NNTFc5MLg=
 github.com/ebitengine/purego v0.11.3/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
-github.com/go-authn/secretsource v0.8.0 h1:3pUW2vvuftmeikSrxY5a9ZMye5Y8BTplMEKfc7IeeXU=
-github.com/go-authn/secretsource v0.8.0/go.mod h1:LHIVIzADGmzgE5IwtqTmKMcwM6RGvUXX+qZQojtmzlM=
+github.com/go-authn/harden v0.2.0 h1:xPWLSeelcFEo4gJU5aTNWngZn6R/VQ9bTGDx3BRrUb0=
+github.com/go-authn/harden v0.2.0/go.mod h1:sceLxhnMHtExHEp9bU8XHKCw2fp+WFjh6Ri6Yxu2aVA=
+github.com/go-authn/secretsource v0.9.0 h1:N2y+g1LIhtC9+u42IGCNcqB2s6deZ5YUeJt1yGBWyfw=
+github.com/go-authn/secretsource v0.9.0/go.mod h1:59e2lgmXt36JIyrCjlYjLG5BYG+umxYJSAmHb5J+gfk=
 github.com/go-freedesktop/secretservice v0.4.0 h1:PV2fLZ/ZsL2R5T6CMBOQ/5lmwP73rUJ1PN0FG6v5gQ0=
 github.com/go-freedesktop/secretservice v0.4.0/go.mod h1:JQ2M/y+g4Img7KM2bleUTz2EruH9fpkJ4GHqQpYVAMo=
 github.com/go-macos/accessibility v0.6.1 h1:4MowHTwMhUciyDI1tC85Xqw2TfeL5813Hc8vONrqOIw=
