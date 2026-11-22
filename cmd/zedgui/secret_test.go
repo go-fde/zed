@@ -155,6 +155,7 @@ func TestCheckResolvesBeforeTheGUI(t *testing.T) {
 		}
 		var errb bytes.Buffer
 		check.SetErr(&errb)
+		check.SetContext(context.Background())
 		if err := check.Flags().Set(c.flag, c.val); err != nil {
 			t.Fatal(err)
 		}
@@ -162,7 +163,9 @@ func TestCheckResolvesBeforeTheGUI(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: no error", name)
 		}
-		if got := strings.Contains(err.Error(), "macOS only"); got != c.reaches {
+		// off macOS the first GUI call says "macOS only"; on macOS Launch
+		// fails on the archive that does not exist.
+		if got := strings.Contains(err.Error(), "macOS only") || strings.Contains(err.Error(), "a.zed"); got != c.reaches {
 			t.Errorf("%s: reached the GUI = %v, want %v (%v)", name, got, c.reaches, err)
 		}
 		if strings.Contains(err.Error()+errb.String(), testPass) {
