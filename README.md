@@ -307,11 +307,14 @@ ZED_GUI=1 go run github.com/go-fde/zed/cmd/zedgui@latest check \
 ```
 
 - `--secret <ref>` is required and has no default. The reference is resolved
-  by [go-authn/secretsource](https://github.com/go-authn/secretsource) v0.8.0:
+  by [go-authn/secretsource](https://github.com/go-authn/secretsource) v0.9.0:
   `keychain:SERVICE/ACCOUNT`, `systemd-creds:NAME`, `keepassxc:...` or
   `file:PATH` (a regular file, mode 0600 or stricter, owned by you, not a
   symlink, one trailing newline stripped). A loose mode, a symlink or a secret
-  over 4096 bytes is refused before ZEDFREE is touched. The reference may sit
+  over 4096 bytes is refused before ZEDFREE is touched. The symlink check is
+  made when the file is opened and covers the last component: point `file:` at
+  the real file, not at a link to it (a file owned by another user is refused
+  too). The reference may sit
   in argv; the password never does. It is never printed, and every editable
   field's value is withheld from every dump.
 - `--password-file PATH` is deprecated: it means `--secret file:PATH` (the whole

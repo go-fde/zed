@@ -3,13 +3,14 @@ module github.com/go-fde/zed/cmd/zedgui
 go 1.27.4
 
 require (
-	github.com/go-authn/secretsource v0.8.0
+	github.com/go-authn/secretsource v0.9.0
 	github.com/go-macos/accessibility v0.6.1
 	github.com/spf13/cobra v1.10.2
 )
 
 require (
 	github.com/ebitengine/purego v0.11.3 // indirect
+	github.com/go-authn/harden v0.2.0 // indirect
 	github.com/go-freedesktop/secretservice v0.4.0 // indirect
 	github.com/go-macos/keychain v0.3.1 // indirect
 	github.com/go-macos/objc v0.12.0 // indirect
