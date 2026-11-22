@@ -1,48 +1,10 @@
 package main
 
 import (
-	"errors"
-	"os"
 	"strings"
 
 	ax "github.com/go-macos/accessibility"
 )
-
-// readPassword returns the last non-empty line of the file at path. The value
-// is held only by the caller; nothing here prints it.
-func readPassword(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if s := strings.TrimSpace(lines[i]); s != "" {
-			return s, nil
-		}
-	}
-	return "", errors.New("the password file has no non-empty line")
-}
-
-// readMarkedPassword returns the first `backquoted` token of the first line
-// containing marker.
-func readMarkedPassword(path, marker string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if !strings.Contains(l, marker) {
-			continue
-		}
-		parts := strings.Split(l, "`")
-		if len(parts) >= 3 && parts[1] != "" {
-			return parts[1], nil
-		}
-		return "", errors.New("the marked line has no `quoted` password")
-	}
-	return "", errors.New("no line contains the marker")
-}
 
 // Kind is what the application is showing.
 type Kind string

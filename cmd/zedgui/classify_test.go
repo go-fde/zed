@@ -2,52 +2,11 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	ax "github.com/go-macos/accessibility"
 )
-
-func writeFile(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "f.md")
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func TestReadPasswordLastNonEmptyLine(t *testing.T) {
-	p := writeFile(t, "intro\r\nsecret-value  \r\n\r\n\n")
-	got, err := readPassword(p)
-	if err != nil || got != "secret-value" {
-		t.Fatalf("got %q, %v", got, err)
-	}
-	if _, err := readPassword(writeFile(t, "\n \n")); err == nil {
-		t.Fatal("empty file must fail")
-	}
-	if _, err := readPassword(filepath.Join(t.TempDir(), "absent")); err == nil {
-		t.Fatal("missing file must fail")
-	}
-}
-
-func TestReadMarkedPassword(t *testing.T) {
-	p := writeFile(t, "Title\n\nPassword of every archive: `pw-123`\nlast line\n")
-	if got, err := readMarkedPassword(p, "Password of every"); err != nil || got != "pw-123" {
-		t.Fatalf("got %q, %v", got, err)
-	}
-	if _, err := readMarkedPassword(p, "absent marker"); err == nil {
-		t.Fatal("absent marker must fail")
-	}
-	if _, err := readMarkedPassword(writeFile(t, "Password: none here\n"), "Password"); err == nil {
-		t.Fatal("unquoted must fail")
-	}
-	if _, err := readMarkedPassword(filepath.Join(t.TempDir(), "absent"), "x"); err == nil {
-		t.Fatal("missing file must fail")
-	}
-}
 
 func app(ws ...ax.Node) *ax.Node { return &ax.Node{Role: "AXApplication", Children: ws} }
 

@@ -5,9 +5,10 @@
 //
 // It is a live tool: every command needs ZED_GUI=1 in the environment, and the
 // terminal (or the binary) must be authorised in System Settings > Privacy &
-// Security > Accessibility. The password is read by this program from the last
-// non-empty line of a file (--password-file) and is never printed, logged or
-// part of a dump: every editable field's value is withheld.
+// Security > Accessibility. The password is resolved by this program from a
+// go-authn/secretsource reference (--secret: keychain:, systemd-creds:,
+// keepassxc:, or an owner-only file:), has no default, and is never printed,
+// logged or part of a dump: every editable field's value is withheld.
 package main
 
 import (
@@ -27,11 +28,6 @@ var osExit = os.Exit
 
 var extra []*cobra.Command
 
-func defaultPasswordFile() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Documents", "VCS", "GIT", "localhost", "zed-corpus", "README.md")
-}
-
 // RootCmd builds the command tree.
 func RootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -46,7 +42,7 @@ func RootCmd() *cobra.Command {
 			return requireTrust()
 		},
 	}
-	var pwFile, pwMarker string
+	var secret, pwFile string
 	var cont, empty bool
 	var wrong bool
 	var timeout time.Duration
@@ -60,9 +56,15 @@ func RootCmd() *cobra.Command {
 			if empty {
 				expect = []string{}
 			}
+			// Resolved before the GUI is touched: a refused source launches nothing.
+			pw, err := resolveSecret(cmd.Context(), secret, pwFile, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer clear(pw)
 			failed := false
 			for _, a := range args {
-				v, err := runCheck(cmd.OutOrStdout(), a, pwFile, pwMarker, wrong, cont, timeout, expect)
+				v, err := runCheck(cmd.OutOrStdout(), a, string(pw), wrong, cont, timeout, expect)
 				if err != nil {
 					return err
 				}
@@ -75,8 +77,11 @@ func RootCmd() *cobra.Command {
 			return nil
 		},
 	}
-	check.Flags().StringVar(&pwFile, "password-file", defaultPasswordFile(), "file whose last non-empty line is the password")
-	check.Flags().StringVar(&pwMarker, "password-marker", "", "instead of the last line, use the first `quoted` token of the first line containing this text")
+	check.Flags().StringVar(&secret, "secret", "", "reference of the password (no default): keychain:SERVICE/ACCOUNT, systemd-creds:NAME, keepassxc:..., or file:PATH (owner-only, not a symlink, at most 4096 bytes)")
+	check.Flags().StringVar(&pwFile, "password-file", "", "deprecated: same as --secret file:PATH (the whole file is the password, one trailing newline stripped)")
+	check.Flags().MarkDeprecated("password-file", "use --secret file:PATH")
+	check.MarkFlagsOneRequired("secret", "password-file")
+	check.MarkFlagsMutuallyExclusive("secret", "password-file")
 	check.Flags().BoolVar(&empty, "expect-empty", false, "expect an empty archive")
 	check.Flags().BoolVar(&cont, "continue", false, "answer Yes to a Yes/No warning (e.g. a corrupted-container warning) and report what follows")
 	check.Flags().BoolVar(&wrong, "wrong-password", false, "negative control: enter a wrong password and expect a refusal")
@@ -107,17 +112,7 @@ func RootCmd() *cobra.Command {
 
 // runCheck returns whether the outcome is the one expected: opened (or refused
 // with --wrong-password), and the listing equal to --expect when given.
-func runCheck(w io.Writer, archive, pwFile, pwMarker string, wrong, cont bool, timeout time.Duration, expect []string) (bool, error) {
-	var pw string
-	var err error
-	if pwMarker != "" {
-		pw, err = readMarkedPassword(pwFile, pwMarker)
-	} else {
-		pw, err = readPassword(pwFile)
-	}
-	if err != nil {
-		return false, err
-	}
+func runCheck(w io.Writer, archive, pw string, wrong, cont bool, timeout time.Duration, expect []string) (bool, error) {
 	if wrong {
 		pw += "-wrong"
 	}
