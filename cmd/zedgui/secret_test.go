@@ -128,6 +128,49 @@ func FuzzSecretRef(f *testing.F) {
 	})
 }
 
+// check resolves the secret before it touches the GUI (off macOS, the first
+// GUI call answers "macOS only"): a refused source never gets that far, an
+// accepted one does.
+func TestCheckResolvesBeforeTheGUI(t *testing.T) {
+	good := writeMode(t, "good", []byte(testPass), 0o600)
+	loose := writeMode(t, "loose", []byte(testPass), 0o644)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		flag, val string
+		reaches   bool
+	}{
+		"good":           {"secret", "file:" + good, true},
+		"good passfile":  {"password-file", good, true},
+		"loose":          {"secret", "file:" + loose, false},
+		"loose passfile": {"password-file", loose, false},
+		"symlink":        {"secret", "file:" + link, false},
+	} {
+		root := RootCmd()
+		check, _, err := root.Find([]string{"check"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var errb bytes.Buffer
+		check.SetErr(&errb)
+		if err := check.Flags().Set(c.flag, c.val); err != nil {
+			t.Fatal(err)
+		}
+		err = check.RunE(check, []string{"a.zed"})
+		if err == nil {
+			t.Fatalf("%s: no error", name)
+		}
+		if got := strings.Contains(err.Error(), "macOS only"); got != c.reaches {
+			t.Errorf("%s: reached the GUI = %v, want %v (%v)", name, got, c.reaches, err)
+		}
+		if strings.Contains(err.Error()+errb.String(), testPass) {
+			t.Errorf("%s: output names the secret", name)
+		}
+	}
+}
+
 // There is no default password source and no plaintext document is read for
 // a password: --secret and --password-file default to empty, and the
 // --password-marker flag (a `quoted` token out of prose) is gone.
