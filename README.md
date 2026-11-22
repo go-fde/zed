@@ -303,13 +303,26 @@ human clicks anything.
 
 ```
 ZED_GUI=1 go run github.com/go-fde/zed/cmd/zedgui@latest check \
-    --password-file README.md --expect hello.txt --expect Documents archive.zed
+    --secret keychain:zedgui/test-archives --expect hello.txt --expect Documents archive.zed
 ```
 
-- The password is the last non-empty line of `--password-file` (or the first
-  `` `quoted` `` token of the line holding `--password-marker`). It is read by
-  the program, never printed, and every editable field's value is withheld from
-  every dump.
+- `--secret <ref>` is required and has no default. The reference is resolved
+  by [go-authn/secretsource](https://github.com/go-authn/secretsource) v0.8.0:
+  `keychain:SERVICE/ACCOUNT`, `systemd-creds:NAME`, `keepassxc:...` or
+  `file:PATH` (a regular file, mode 0600 or stricter, owned by you, not a
+  symlink, one trailing newline stripped). A loose mode, a symlink or a secret
+  over 4096 bytes is refused before ZEDFREE is touched. The reference may sit
+  in argv; the password never does. It is never printed, and every editable
+  field's value is withheld from every dump.
+- `--password-file PATH` is deprecated: it means `--secret file:PATH` (the whole
+  file is the password, no longer its last line) and warns on stderr.
+  `--password-marker` is removed: a password does not belong in a prose
+  document.
+- If you keep the secret in a systemd credential sealed to a TPM, do not pin
+  it to a bare `--tpm2-pcrs=7`: a firmware or shim update changes the
+  measured state and the credential becomes unreadable. Keep a recovery path:
+  `host+tpm2` without PCRs, a signed PCR policy (`--tpm2-public-key`),
+  systemd-pcrlock, or a documented re-seal.
 - `--wrong-password` is the negative control (a refusal is expected).
   `--continue` answers Yes to a Yes/No warning and reports what follows.
 - The terminal that runs it must be allowed in System Settings, Privacy &
